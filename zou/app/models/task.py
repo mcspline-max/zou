@@ -47,6 +47,7 @@ class Task(db.Model, BaseMixin, SerializerMixin):
     nb_assets_ready = db.Column(db.Integer, default=0)
     data = db.Column(JSONB)
     nb_drawings = db.Column(db.Integer, default=0)
+    is_favorite = db.Column(db.Boolean(), default=False, nullable=False)
 
     shotgun_id = db.Column(db.Integer)
     last_preview_file_id = db.Column(UUIDType(binary=False))
