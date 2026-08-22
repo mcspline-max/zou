@@ -4,7 +4,6 @@ from zou.app.models.day_off import DayOff
 from zou.app.models.milestone import Milestone
 from zou.app.models.project import ProjectTaskTypeLink
 from zou.app.services import (
-    budget_service,
     projects_service,
     tasks_service,
 )

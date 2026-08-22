@@ -11,7 +11,6 @@ from zou.app.services import (
     persons_service,
     tasks_service,
     permissions_service,
-    user_service,
 )
 from zou.app.utils import events, permissions
 

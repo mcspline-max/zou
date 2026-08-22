@@ -547,9 +547,9 @@ class ProjectMetadataDescriptorTestCase(ApiDBTestCase):
         # Zone and Angle are created in the order that contradicts their
         # alphabetical one, which is the order the leftovers fall back to.
         descriptor1 = self.add("Contractor")
-        descriptor2 = self.add("Zone")
+        self.add("Zone")
         descriptor3 = self.add("Location")
-        descriptor4 = self.add("Angle")
+        self.add("Angle")
         descriptor5 = self.add("Status")
 
         self.assertEqual(

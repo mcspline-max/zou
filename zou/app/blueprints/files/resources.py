@@ -1,6 +1,6 @@
 import os
 
-from flask import request, abort, current_app
+from flask import request, current_app
 from flask import send_file as flask_send_file
 from flask.views import MethodView
 from flask_jwt_extended import jwt_required
@@ -29,7 +29,6 @@ from zou.app.services import (
     tasks_service,
     entities_service,
     permissions_service,
-    user_service,
 )
 
 from zou.app.services.exception import (

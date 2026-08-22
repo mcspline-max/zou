@@ -83,6 +83,7 @@ _PLAYLIST_LIST_ATTRS = (
     "for_client",
     "for_entity",
     "is_for_all",
+    "auto_advance",
     "created_at",
     "updated_at",
     "created_by",

@@ -3,7 +3,6 @@ Pydantic schemas for request body validation in the tasks blueprint.
 """
 
 from typing import List, Optional
-from uuid import UUID
 
 from pydantic import Field
 

@@ -5,7 +5,6 @@ from zou.app.models.schedule_item import ScheduleItem
 from zou.app.blueprints.crud.base import BaseModelResource, BaseModelsResource
 
 from zou.app.services import permissions_service
-from zou.app.services import user_service
 from zou.app.services.exception import WrongParameterException
 
 

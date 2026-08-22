@@ -1,7 +1,5 @@
 from tests.base import ApiDBTestCase
 
-from zou.app.services import breakdown_service
-
 
 class BreakdownRoutesTestCase(ApiDBTestCase):
     def setUp(self):

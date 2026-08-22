@@ -161,6 +161,21 @@ FS_SWIFT_USER = os.getenv("FS_SWIFT_USER")
 FS_SWIFT_TENANT_NAME = os.getenv("FS_SWIFT_TENANT_NAME")
 FS_SWIFT_KEY = os.getenv("FS_SWIFT_KEY")
 FS_SWIFT_REGION_NAME = os.getenv("FS_SWIFT_REGION_NAME")
+# Keystone v3 needs these to disambiguate a username/project name that
+# isn't globally unique across domains — flask-fs2's SwiftBackend only sets
+# tenant_name/region_name in os_options itself, but merges in whatever
+# extra os_options dict it's handed, and flask_fs's Storage.configure()
+# auto-forwards any FS_SWIFT_* app config key through as backend config
+# (see flask_fs/storage.py), dict values included — so this needs no
+# further wiring on our side.
+FS_SWIFT_USER_DOMAIN_NAME = os.getenv("FS_SWIFT_USER_DOMAIN_NAME", "Default")
+FS_SWIFT_PROJECT_DOMAIN_NAME = os.getenv(
+    "FS_SWIFT_PROJECT_DOMAIN_NAME", "Default"
+)
+FS_SWIFT_OS_OPTIONS = {
+    "user_domain_name": FS_SWIFT_USER_DOMAIN_NAME,
+    "project_domain_name": FS_SWIFT_PROJECT_DOMAIN_NAME,
+}
 FS_SWIFT_CREATE_CONTAINER = envtobool("FS_SWIFT_CREATE_CONTAINER", False)
 FS_SWIFT_AUTH_VERSION = os.getenv("FS_SWIFT_AUTH_VERSION", "3")
 FS_SWIFT_AES256_ENCRYPTED = envtobool("FS_SWIFT_AES256_ENCRYPTED", False)

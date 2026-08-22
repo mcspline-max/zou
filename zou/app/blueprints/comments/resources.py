@@ -3,6 +3,7 @@ from flask.views import MethodView
 from flask_jwt_extended import jwt_required
 
 from zou.app.mixin import ArgsMixin
+from zou.app.models.preview_file import PreviewFile
 from zou.app.services.exception import (
     AttachmentFileNotFoundException,
     WrongParameterException,
@@ -22,7 +23,6 @@ from zou.app.services import (
     persons_service,
     tasks_service,
     permissions_service,
-    user_service,
 )
 from zou.app import config
 
@@ -266,6 +266,8 @@ class CommentTaskResource(MethodView):
             checklist,
             links,
             for_client,
+            timecode,
+            preview_file_id,
         ) = self.get_arguments()
 
         try:
@@ -292,6 +294,16 @@ class CommentTaskResource(MethodView):
             person_id = None
             created_at = None
             for_client = False
+        # Never trust a client-supplied id to belong to its parent: drop it
+        # rather than let a spoofed id bind the comment to another task's
+        # preview.
+        if preview_file_id:
+            preview_file = PreviewFile.get(preview_file_id)
+            if (
+                preview_file is None
+                or str(preview_file.task_id) != str(task_id)
+            ):
+                preview_file_id = None
         comment = comments_service.create_comment(
             person_id,
             task_id,
@@ -302,6 +314,8 @@ class CommentTaskResource(MethodView):
             created_at,
             links,
             for_client=for_client,
+            timecode=timecode,
+            preview_file_id=preview_file_id,
         )
         return comment, 201
 
@@ -315,6 +329,8 @@ class CommentTaskResource(MethodView):
             body.checklist,
             body.links,
             body.for_client,
+            body.timecode,
+            body.preview_file_id,
         )
 
 

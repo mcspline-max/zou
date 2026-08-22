@@ -6,7 +6,6 @@ from zou.app.models.entity import EntityConceptLink
 from zou.app.services import (
     comments_service,
     news_service,
-    tasks_service,
 )
 
 

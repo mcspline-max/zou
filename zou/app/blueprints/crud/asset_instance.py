@@ -2,7 +2,7 @@ from flask_jwt_extended import jwt_required
 
 from zou.app.models.asset_instance import AssetInstance
 
-from zou.app.services import assets_service, permissions_service, user_service
+from zou.app.services import assets_service, permissions_service
 from zou.app.utils import permissions
 
 from zou.app.blueprints.crud.base import BaseModelResource, BaseModelsResource

@@ -8,7 +8,6 @@ from zou.app.services import (
     concepts_service,
     tasks_service,
     permissions_service,
-    user_service,
     persons_service,
 )
 

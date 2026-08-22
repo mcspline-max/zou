@@ -30,6 +30,12 @@ class PlaylistShareLink(db.Model, BaseMixin, SerializerMixin):
     expiration_date = db.Column(db.DateTime, nullable=True)
     is_active = db.Column(db.Boolean(), default=True, nullable=False)
     can_comment = db.Column(db.Boolean(), default=True, nullable=False)
+    # Whether guests can switch between revisions of a shot via a version
+    # selector, or only ever see the revision pinned into the playlist.
+    # Defaults off: a studio has to opt in per link, not opt out.
+    show_revision_selector = db.Column(
+        db.Boolean(), default=False, nullable=False
+    )
     password = db.Column(db.String(255), nullable=True)
 
     __table_args__ = (

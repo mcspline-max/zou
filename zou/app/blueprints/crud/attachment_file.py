@@ -8,7 +8,6 @@ from zou.app.services import (
     chats_service,
     permissions_service,
     tasks_service,
-    user_service,
 )
 
 from zou.app.utils.permissions import PermissionDenied

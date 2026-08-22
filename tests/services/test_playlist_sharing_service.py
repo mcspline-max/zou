@@ -1,4 +1,5 @@
 import datetime
+import uuid
 
 from unittest.mock import patch
 
@@ -17,7 +18,10 @@ from zou.app.services.exception import (
     PlaylistShareLinkNotFoundException,
     WrongParameterException,
 )
-from zou.app.services.playlist_sharing_service import GuestCommentNotFound
+from zou.app.services.playlist_sharing_service import (
+    GuestCommentForbidden,
+    GuestCommentNotFound,
+)
 
 
 class SharedPlaylistTestCase(ApiDBTestCase):
@@ -512,6 +516,93 @@ class SharedCommentTestCase(SharedPlaylistTestCase):
             },
         )
 
+
+class SharedCommentReplyTestCase(SharedCommentTestCase):
+    """
+    A guest may reply to any comment visible in the shared view — their
+    own, another guest's, or a studio member's for_client comment — unlike
+    update_guest_comment/delete_guest_comment, which are owner-only.
+    """
+
+    def bound_guest(self, token):
+        """
+        A guest actually created from this share link (has the
+        share_link_id binding get_guest_for_share_link checks), unlike the
+        bare SharedCommentTestCase.guest() helper.
+        """
+        return playlist_sharing_service.create_guest(token, "Reviewer")
+
+    def test_a_guest_can_reply_to_their_own_comment(self):
+        token = self.share()
+        guest = self.bound_guest(token)
+        comment = self.comment(person=Person.get(guest["id"]))
+
+        reply = playlist_sharing_service.reply_to_shared_comment(
+            comment.id, guest["id"], "Thanks!", token
+        )
+        self.assertEqual(reply["text"], "Thanks!")
+        self.assertEqual(reply["person_id"], guest["id"])
+        self.assertEqual(
+            [r["id"] for r in Comment.get(comment.id).replies], [reply["id"]]
+        )
+
+    def test_a_guest_can_reply_to_a_for_client_studio_comment(self):
+        token = self.share()
+        guest = self.bound_guest(token)
+        comment = self.comment(for_client=True)
+
+        reply = playlist_sharing_service.reply_to_shared_comment(
+            comment.id, guest["id"], "Noted", token
+        )
+        self.assertEqual(reply["person_id"], guest["id"])
+
+    def test_a_guest_cannot_reply_to_an_internal_comment(self):
+        token = self.share()
+        guest = self.bound_guest(token)
+        comment = self.comment()  # for_client=False, non-guest author
+
+        self.assertRaises(
+            GuestCommentNotFound,
+            playlist_sharing_service.reply_to_shared_comment,
+            comment.id,
+            guest["id"],
+            "Can I see this?",
+            token,
+        )
+
+    def test_reply_is_rejected_for_a_guest_not_bound_to_this_link(self):
+        token = self.share()
+        unbound_guest = self.guest()
+        comment = self.comment(for_client=True)
+
+        self.assertRaises(
+            GuestCommentForbidden,
+            playlist_sharing_service.reply_to_shared_comment,
+            comment.id,
+            str(unbound_guest.id),
+            "Impersonating",
+            token,
+        )
+
+    def test_reply_is_rejected_for_a_comment_outside_the_shared_playlist(self):
+        # Move an otherwise-visible comment onto a task id absent from the
+        # playlist's shots — cheaper than standing up a second real task,
+        # and reply_to_shared_comment never needs that task to exist: it
+        # only compares object_id against the playlist's shot task ids.
+        token = self.share()
+        guest = self.bound_guest(token)
+        comment = self.comment(for_client=True)
+        comment.update({"object_id": str(uuid.uuid4())})
+
+        self.assertRaises(
+            GuestCommentNotFound,
+            playlist_sharing_service.reply_to_shared_comment,
+            comment.id,
+            guest["id"],
+            "Off playlist",
+            token,
+        )
+
     def share_a_comment_attachment(self, **comment_fields):
         """
         Position the playlist on the task, comment on it, and attach a file.
@@ -585,3 +676,187 @@ class SharedCommentTestCase(SharedPlaylistTestCase):
             attachment_id,
             "note.png",
         )
+
+
+class SharedCommentAckTestCase(SharedCommentTestCase):
+    """
+    A guest may acknowledge ("like") any comment visible in the shared
+    view, same visibility scoping as replies.
+    """
+
+    def bound_guest(self, token):
+        return playlist_sharing_service.create_guest(token, "Reviewer")
+
+    def test_a_guest_can_toggle_acknowledgement_on_a_visible_comment(self):
+        token = self.share()
+        guest = self.bound_guest(token)
+        comment = self.comment(for_client=True)
+
+        acked = playlist_sharing_service.acknowledge_shared_comment(
+            comment.id, guest["id"], token
+        )
+        self.assertIn(guest["id"], acked["acknowledgements"])
+
+        unacked = playlist_sharing_service.acknowledge_shared_comment(
+            comment.id, guest["id"], token
+        )
+        self.assertNotIn(guest["id"], unacked["acknowledgements"])
+
+    def test_a_guest_cannot_acknowledge_an_internal_comment(self):
+        token = self.share()
+        guest = self.bound_guest(token)
+        comment = self.comment()  # for_client=False, non-guest author
+
+        self.assertRaises(
+            GuestCommentNotFound,
+            playlist_sharing_service.acknowledge_shared_comment,
+            comment.id,
+            guest["id"],
+            token,
+        )
+
+    def test_ack_is_rejected_for_a_guest_not_bound_to_this_link(self):
+        token = self.share()
+        unbound_guest = self.guest()
+        comment = self.comment(for_client=True)
+
+        self.assertRaises(
+            GuestCommentForbidden,
+            playlist_sharing_service.acknowledge_shared_comment,
+            comment.id,
+            str(unbound_guest.id),
+            token,
+        )
+
+
+class SharedCommentReplyEditTestCase(SharedCommentTestCase):
+    """
+    Only the guest who wrote a reply may edit or delete it — unlike
+    reply_to_shared_comment itself, this IS an ownership check.
+    """
+
+    def bound_guest(self, token, name="Reviewer"):
+        return playlist_sharing_service.create_guest(token, name)
+
+    def test_a_guest_can_edit_their_own_reply(self):
+        token = self.share()
+        guest = self.bound_guest(token)
+        comment = self.comment(for_client=True)
+        reply = playlist_sharing_service.reply_to_shared_comment(
+            comment.id, guest["id"], "Original", token
+        )
+
+        updated = playlist_sharing_service.edit_shared_comment_reply(
+            comment.id, reply["id"], guest["id"], "Edited", token
+        )
+        self.assertEqual(updated["text"], "Edited")
+        stored = [r for r in Comment.get(comment.id).replies if r["id"] == reply["id"]]
+        self.assertEqual(stored[0]["text"], "Edited")
+
+    def test_a_guest_cannot_edit_someone_elses_reply(self):
+        token = self.share()
+        author = self.bound_guest(token, "Author")
+        other = self.bound_guest(token, "Other")
+        comment = self.comment(for_client=True)
+        reply = playlist_sharing_service.reply_to_shared_comment(
+            comment.id, author["id"], "Original", token
+        )
+
+        self.assertRaises(
+            playlist_sharing_service.ReplyForbidden,
+            playlist_sharing_service.edit_shared_comment_reply,
+            comment.id,
+            reply["id"],
+            other["id"],
+            "Hijacked",
+            token,
+        )
+
+    def test_editing_an_unknown_reply_raises_reply_not_found(self):
+        token = self.share()
+        guest = self.bound_guest(token)
+        comment = self.comment(for_client=True)
+
+        self.assertRaises(
+            playlist_sharing_service.ReplyNotFound,
+            playlist_sharing_service.edit_shared_comment_reply,
+            comment.id,
+            str(uuid.uuid4()),
+            guest["id"],
+            "Edited",
+            token,
+        )
+
+    def test_a_guest_can_delete_their_own_reply(self):
+        token = self.share()
+        guest = self.bound_guest(token)
+        comment = self.comment(for_client=True)
+        reply = playlist_sharing_service.reply_to_shared_comment(
+            comment.id, guest["id"], "Original", token
+        )
+
+        playlist_sharing_service.delete_shared_comment_reply(
+            comment.id, reply["id"], guest["id"], token
+        )
+        self.assertEqual(Comment.get(comment.id).replies, [])
+
+    def test_a_guest_cannot_delete_someone_elses_reply(self):
+        token = self.share()
+        author = self.bound_guest(token, "Author")
+        other = self.bound_guest(token, "Other")
+        comment = self.comment(for_client=True)
+        reply = playlist_sharing_service.reply_to_shared_comment(
+            comment.id, author["id"], "Original", token
+        )
+
+        self.assertRaises(
+            playlist_sharing_service.ReplyForbidden,
+            playlist_sharing_service.delete_shared_comment_reply,
+            comment.id,
+            reply["id"],
+            other["id"],
+            token,
+        )
+
+
+class CreateGuestTestCase(SharedPlaylistTestCase):
+    """
+    create_guest's reuse-by-name matching is what lets a reviewer log out
+    and back in as "the same person" — get this wrong and every comment
+    they'd already posted looks orphaned on their next visit.
+    """
+
+    def test_relogging_in_with_a_different_case_reuses_the_same_guest(self):
+        token = self.share()
+        first = playlist_sharing_service.create_guest(token, "Mat")
+        second = playlist_sharing_service.create_guest(token, "MAT")
+        third = playlist_sharing_service.create_guest(token, "mAt")
+
+        self.assertEqual(first["id"], second["id"])
+        self.assertEqual(first["id"], third["id"])
+        # The originally-stored casing is what's shown back, not whatever
+        # was retyped this time.
+        self.assertEqual(third["first_name"], "Mat")
+
+    def test_different_names_still_get_different_guests(self):
+        token = self.share()
+        mat = playlist_sharing_service.create_guest(token, "Mat")
+        pat = playlist_sharing_service.create_guest(token, "Pat")
+
+        self.assertNotEqual(mat["id"], pat["id"])
+
+    def test_same_name_on_a_different_share_link_is_a_different_guest(self):
+        # The share_link_id scoping (already covered by its own docstring)
+        # must survive the switch to a case-insensitive match — this
+        # guards against a lower()-only rewrite that drops that filter.
+        token_a = self.share()
+        other_playlist = self.generate_fixture_playlist("Other Playlist")
+        token_b = playlist_sharing_service.create_share_link(
+            other_playlist["id"], self.person.id
+        )["token"]
+
+        guest_a = playlist_sharing_service.create_guest(token_a, "Mat")
+        guest_b = playlist_sharing_service.create_guest(token_b, "mat")
+
+        self.assertNotEqual(guest_a["id"], guest_b["id"])
+        self.assertEqual(len(Comment.get(comment.id).replies), 1)

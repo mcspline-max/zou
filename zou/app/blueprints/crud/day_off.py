@@ -8,7 +8,6 @@ from zou.app.blueprints.crud.base import BaseModelsResource, BaseModelResource
 from zou.app.services import (
     permissions_service,
     time_spents_service,
-    user_service,
 )
 
 from zou.app.services.exception import WrongParameterException

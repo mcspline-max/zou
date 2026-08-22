@@ -10,7 +10,6 @@ from zou.app.services import (
     permissions_service,
     projects_service,
     shots_service,
-    user_service,
 )
 from zou.app.utils import csv_utils
 

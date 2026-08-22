@@ -68,6 +68,23 @@ class CommentRoutesTestCase(CommentTestCase):
         texts = [c["text"] for c in comments]
         self.assertIn("A new comment", texts)
 
+    def test_comment_task_with_timecode(self):
+        result = self.post(
+            f"/actions/tasks/{self.task.id}/comment",
+            {
+                "task_status_id": str(self.task_status.id),
+                "comment": "Comment with timecode",
+                "timecode": 12.5,
+            },
+        )
+        self.assertEqual(result["text"], "Comment with timecode")
+        self.assertEqual(result["timecode"], 12.5)
+        comments = tasks_service.get_comments(str(self.task.id))
+        comment = next(
+            c for c in comments if c["text"] == "Comment with timecode"
+        )
+        self.assertEqual(comment["timecode"], 12.5)
+
     def test_comment_task_empty_text(self):
         result = self.post(
             f"/actions/tasks/{self.task.id}/comment",

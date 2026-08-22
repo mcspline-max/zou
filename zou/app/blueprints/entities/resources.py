@@ -15,7 +15,6 @@ from zou.app.services import (
     tasks_service,
     time_spents_service,
     permissions_service,
-    user_service,
 )
 from zou.app.utils import permissions, validation
 

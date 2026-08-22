@@ -20,6 +20,7 @@ from zou.app.blueprints.playlists.schemas import (
     InviteShareLinkSchema,
     NotifyClientsPlaylistSchema,
     TempPlaylistCreateSchema,
+    UpdatePlaylistShareLinkSchema,
 )
 from zou.app.services import (
     entities_service,
@@ -31,7 +32,6 @@ from zou.app.services import (
     projects_service,
     shots_service,
     permissions_service,
-    user_service,
 )
 from zou.app.services.exception import (
     BuildJobNotFoundException,
@@ -1068,6 +1068,7 @@ class PlaylistShareLinksResource(MethodView):
             person["id"],
             expiration_date=body.expiration_date,
             can_comment=body.can_comment,
+            show_revision_selector=body.show_revision_selector,
             password=body.password,
         )
         return share_link, 201
@@ -1075,12 +1076,10 @@ class PlaylistShareLinksResource(MethodView):
 
 class PlaylistShareLinkResource(MethodView):
     """
-    Revoke a specific share link (manager+).
+    Update or revoke a specific share link (manager+).
     """
 
-    @jwt_required()
-    def delete(self, playlist_id, token):
-        permissions.check_manager_permissions()
+    def _get_owned_share_link(self, playlist_id, token):
         playlist = playlists_service.get_playlist(playlist_id)
         permissions_service.check_manager_project_access(
             playlist["project_id"]
@@ -1089,10 +1088,61 @@ class PlaylistShareLinkResource(MethodView):
             token
         )
         # Path playlist_id must match the share link's own playlist_id;
-        # otherwise a manager who knows any token could revoke it via any
+        # otherwise a manager who knows any token could act on it via any
         # playlist URL they DO have access to.
         if str(share_link.playlist_id) != str(playlist_id):
             raise PlaylistShareLinkNotFoundException
+        return share_link
+
+    @jwt_required()
+    def put(self, playlist_id, token):
+        """
+        Update share link settings
+        ---
+        description: Update comment/version-switching settings on an
+          existing share link without regenerating it. Every field is
+          optional — only what's passed changes.
+        tags:
+          - Playlists
+        parameters:
+          - in: path
+            name: playlist_id
+            required: true
+            schema:
+              type: string
+              format: uuid
+          - in: path
+            name: token
+            required: true
+            schema:
+              type: string
+        requestBody:
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  can_comment:
+                    type: boolean
+                  show_revision_selector:
+                    type: boolean
+        responses:
+          200:
+            description: Updated share link
+        """
+        permissions.check_manager_permissions()
+        self._get_owned_share_link(playlist_id, token)
+        body = validation.validate_request_body(UpdatePlaylistShareLinkSchema)
+        return playlist_sharing_service.update_share_link(
+            token,
+            can_comment=body.can_comment,
+            show_revision_selector=body.show_revision_selector,
+        )
+
+    @jwt_required()
+    def delete(self, playlist_id, token):
+        permissions.check_manager_permissions()
+        self._get_owned_share_link(playlist_id, token)
         return playlist_sharing_service.revoke_share_link(token)
 
 

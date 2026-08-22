@@ -15,7 +15,6 @@ from zou.app.utils import permissions, string
 from zou.app.services import (
     permissions_service,
     projects_service,
-    user_service,
 )
 
 

@@ -10,7 +10,6 @@ from zou.app.services import (
     entities_service,
     persons_service,
     permissions_service,
-    user_service,
 )
 from zou.app.services.exception import WrongParameterException
 

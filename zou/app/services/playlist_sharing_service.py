@@ -1,6 +1,8 @@
 import datetime
 import uuid
 
+from sqlalchemy import func
+
 from zou.app.utils import auth, events
 
 from zou.app.models.entity import Entity
@@ -54,6 +56,7 @@ def create_share_link(
     person_id,
     expiration_date=None,
     can_comment=True,
+    show_revision_selector=False,
     password=None,
 ):
     """
@@ -77,6 +80,7 @@ def create_share_link(
         created_by=person_id,
         expiration_date=_get_expiration_datetime(expiration_date),
         can_comment=can_comment,
+        show_revision_selector=show_revision_selector,
         password=password_hash,
     )
     return share_link.serialize()
@@ -99,6 +103,23 @@ def revoke_share_link(token):
     """
     share_link = get_share_link_by_token_raw(token)
     share_link.update({"is_active": False})
+    return share_link.serialize()
+
+
+def update_share_link(token, can_comment=None, show_revision_selector=None):
+    """
+    Update the settings of an existing share link. Only the fields
+    explicitly passed (not None) are changed — unlike creation, editing a
+    live link shouldn't require restating every other setting.
+    """
+    share_link = get_share_link_by_token_raw(token)
+    data = {}
+    if can_comment is not None:
+        data["can_comment"] = can_comment
+    if show_revision_selector is not None:
+        data["show_revision_selector"] = show_revision_selector
+    if data:
+        share_link.update(data)
     return share_link.serialize()
 
 
@@ -204,7 +225,10 @@ def is_preview_file_in_shared_playlist(token, preview_file_id):
     # Accept the other positions of a positioned revision: a single revision
     # may carry several preview files (same task, same revision, different
     # position). A different revision — or the same revision number on another
-    # task type of the entity — stays rejected.
+    # task type of the entity — stays rejected, unless the link explicitly
+    # allows switching revisions, in which case any revision of the same
+    # task as a positioned shot is fair game too.
+    show_revision_selector = share_link.get("show_revision_selector", False)
     for positioned_id in positioned_ids:
         try:
             main_preview_file = files_service.get_preview_file(positioned_id)
@@ -213,10 +237,11 @@ def is_preview_file_in_shared_playlist(token, preview_file_id):
             # (deletion does not scrub the shots column). Skip the dangling
             # id instead of letting it mask a valid sibling/revision match.
             continue
-        if (
-            str(main_preview_file["task_id"]) == str(preview_file["task_id"])
-            and main_preview_file["revision"] == preview_file["revision"]
-        ):
+        if str(main_preview_file["task_id"]) != str(preview_file["task_id"]):
+            continue
+        if main_preview_file["revision"] == preview_file["revision"]:
+            return True
+        if show_revision_selector:
             return True
     return False
 
@@ -275,10 +300,10 @@ def _load_guest_comment(comment_id, guest_id, token):
 
 def update_guest_comment(comment_id, guest_id, data, token):
     """
-    Update a comment authored by a guest. Accepts ``text``, ``checklist`` and
-    ``task_status_id`` in ``data``. Triggers the same post-update side effects
-    as the regular CRUD path (reset mentions, cache, events, task status
-    reset when needed).
+    Update a comment authored by a guest. Accepts ``text``, ``checklist``,
+    ``task_status_id`` and ``timecode`` in ``data``. Triggers the same
+    post-update side effects as the regular CRUD path (reset mentions,
+    cache, events, task status reset when needed).
 
     The ``token`` is used to scope the comment to the share link's playlist,
     and also to reject ``task_status_id`` values that are not flagged as
@@ -307,6 +332,8 @@ def update_guest_comment(comment_id, guest_id, data, token):
         comment_row.text = data["text"] or ""
     if "checklist" in data:
         comment_row.checklist = data["checklist"] or []
+    if "timecode" in data:
+        comment_row.timecode = data["timecode"]
     if new_status_id:
         comment_row.task_status_id = new_status_id
     comment_row.editor_id = guest_id
@@ -383,6 +410,133 @@ def delete_guest_comment(comment_id, guest_id, token):
         )
 
 
+def _load_visible_shared_comment(comment_id, guest_id, token):
+    """
+    Fetch a comment by id and ensure (a) guest_id is a guest bound to this
+    share link, (b) the comment lives on a task that's part of the
+    playlist the token exposes, and (c) the comment is visible in the
+    shared view (get_shared_task_comments' own rule: for_client, or
+    authored by a guest).
+
+    Shared by every guest action that may target ANY visible comment —
+    reply/acknowledge, and (unlike update_guest_comment/delete_guest_comment,
+    which are ownership checks) not just the guest's own — mirroring how a
+    studio member can already reply to/acknowledge a guest's comment from
+    the studio side.
+
+    Raises GuestCommentForbidden or GuestCommentNotFound.
+    """
+    if not guest_id:
+        raise GuestCommentForbidden
+    share_link = validate_share_token(token)
+    try:
+        get_guest_for_share_link(guest_id, share_link)
+    except Exception:
+        raise GuestCommentForbidden
+
+    try:
+        comment = tasks_service.get_comment(comment_id)
+    except Exception:
+        raise GuestCommentNotFound
+
+    task_id = comment.get("object_id")
+    if task_id is None:
+        raise GuestCommentNotFound
+    # Use the enriched playlist so preview_file_task_id is populated for
+    # shots added via the playlist builder, which only stores entity_id /
+    # preview_file_id at rest (same reasoning as _load_guest_comment).
+    playlist = playlists_service.get_playlist_with_preview_file_revisions(
+        share_link["playlist_id"]
+    )
+    playlist_task_ids = {
+        str(shot.get("preview_file_task_id"))
+        for shot in playlist.get("shots", []) or []
+        if shot.get("preview_file_task_id")
+    }
+    if str(task_id) not in playlist_task_ids:
+        raise GuestCommentNotFound
+
+    author = Person.get(comment.get("person_id"))
+    author_is_guest = bool(author and author.is_guest)
+    if not (comment.get("for_client") or author_is_guest):
+        raise GuestCommentNotFound
+
+    return comment
+
+
+def reply_to_shared_comment(comment_id, guest_id, text, token):
+    """
+    Add a reply to a comment visible in this shared playlist, as the given
+    guest.
+    """
+    from zou.app.services import comments_service
+
+    _load_visible_shared_comment(comment_id, guest_id, token)
+    return comments_service.reply_comment(comment_id, text, person_id=guest_id)
+
+
+def acknowledge_shared_comment(comment_id, guest_id, token):
+    """
+    Toggle the given guest's acknowledgement ("like") on a comment visible
+    in this shared playlist. A guest request carries no JWT, so
+    comments_service.acknowledge_comment is called with an explicit
+    person_id instead of resolving the current user.
+    """
+    from zou.app.services import comments_service
+
+    _load_visible_shared_comment(comment_id, guest_id, token)
+    return comments_service.acknowledge_comment(comment_id, person_id=guest_id)
+
+
+class ReplyForbidden(Exception):
+    pass
+
+
+class ReplyNotFound(Exception):
+    pass
+
+
+def _find_reply(comment, reply_id):
+    for reply in comment.get("replies") or []:
+        if str(reply.get("id")) == str(reply_id):
+            return reply
+    return None
+
+
+def edit_shared_comment_reply(comment_id, reply_id, guest_id, text, token):
+    """
+    Edit a reply on a comment visible in this shared playlist. Unlike
+    reply_to_shared_comment (any visible comment), this IS an ownership
+    check: only the guest who wrote the reply may edit it.
+    """
+    from zou.app.services import comments_service
+
+    comment = _load_visible_shared_comment(comment_id, guest_id, token)
+    reply = _find_reply(comment, reply_id)
+    if reply is None:
+        raise ReplyNotFound
+    if str(reply.get("person_id")) != str(guest_id):
+        raise ReplyForbidden
+    return comments_service.edit_reply(comment_id, reply_id, text)
+
+
+def delete_shared_comment_reply(comment_id, reply_id, guest_id, token):
+    """
+    Delete a reply from a comment visible in this shared playlist. Same
+    ownership check as edit_shared_comment_reply: only the guest who wrote
+    the reply may delete it.
+    """
+    from zou.app.services import comments_service
+
+    comment = _load_visible_shared_comment(comment_id, guest_id, token)
+    reply = _find_reply(comment, reply_id)
+    if reply is None:
+        raise ReplyNotFound
+    if str(reply.get("person_id")) != str(guest_id):
+        raise ReplyForbidden
+    comments_service.delete_reply(comment_id, reply_id)
+
+
 def _serialize_enriched_comment(comment_id):
     """
     Return a comment dict with `attachment_files` expanded to full objects
@@ -398,6 +552,7 @@ def _serialize_enriched_comment(comment_id):
             AttachmentFile.id.in_(ids)
         ).all()
         comment["attachment_files"] = [af.present() for af in attachments]
+    _embed_shared_reply_authors([comment])
     return comment
 
 
@@ -485,6 +640,45 @@ def remove_guest_comment_attachment(
     deletion_service.remove_attachment_file(attachment)
 
 
+def _embed_shared_reply_authors(comments):
+    """
+    Attach a full author to each reply on the given comments, in place.
+
+    Unlike tasks_service.embed_reply_authors (used by the authenticated
+    client view, which hides non-client reply authors to keep studio
+    identities private on comments a client wasn't shown), a reply here
+    only ever exists on a comment that's already visible to the guest —
+    the same way a studio member's for_client top-level comment already
+    shows their name — so every reply author is embedded regardless of
+    role. Shared by every path that hands a comment back to a guest:
+    the task-comments list and a single freshly-edited comment alike.
+    """
+    reply_person_ids = {
+        reply.get("person_id")
+        for comment in comments
+        for reply in (comment.get("replies") or [])
+        if reply.get("person_id")
+    }
+    if not reply_person_ids:
+        return
+    guest_ids = {
+        str(person_id)
+        for (person_id,) in Person.query.filter_by(is_guest=True)
+        .with_entities(Person.id)
+        .all()
+    }
+    persons_map = persons_service.get_short_persons_map(list(reply_person_ids))
+    for comment in comments:
+        for reply in comment.get("replies") or []:
+            author = persons_map.get(reply.get("person_id"))
+            if author:
+                author = {
+                    **author,
+                    "is_guest": str(reply.get("person_id")) in guest_ids,
+                }
+            reply["person"] = author
+
+
 def get_shared_task_comments(task_id):
     """
     Return comments visible in the shared context for a task: those flagged
@@ -515,6 +709,9 @@ def get_shared_task_comments(task_id):
         if comment.get("person"):
             comment["person"]["is_guest"] = is_guest_author
         visible.append(comment)
+
+    _embed_shared_reply_authors(visible)
+
     return visible
 
 
@@ -684,6 +881,12 @@ def create_guest(token, first_name, last_name=""):
     Smith" who has commented through link A cannot be impersonated by an
     attacker who later creates a guest with the same name through link B.
     The guest always has ``is_guest=True`` and ``role=client``.
+
+    The match is case-insensitive: a reviewer who logs out and back in
+    doesn't necessarily retype their name with the exact same
+    capitalization (autocapitalize, a different device, plain habit), and
+    a strict match would silently mint a second guest identity, orphaning
+    every comment they'd already posted from the "same" name.
     """
     share_link = validate_share_token(token)
     share_link_id = str(share_link["id"])
@@ -691,11 +894,9 @@ def create_guest(token, first_name, last_name=""):
     last_name = (last_name or "").strip()
 
     existing = (
-        Person.query.filter_by(
-            is_guest=True,
-            first_name=first_name,
-            last_name=last_name,
-        )
+        Person.query.filter_by(is_guest=True)
+        .filter(func.lower(Person.first_name) == first_name.lower())
+        .filter(func.lower(Person.last_name) == last_name.lower())
         .filter(Person.data["share_link_id"].astext == share_link_id)
         .first()
     )

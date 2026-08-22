@@ -13,7 +13,6 @@ from zou.app.services import (
     projects_service,
     shots_service,
     permissions_service,
-    user_service,
     tasks_service,
 )
 from zou.app.utils import csv_utils

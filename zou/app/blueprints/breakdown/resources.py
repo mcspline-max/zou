@@ -9,7 +9,6 @@ from zou.app.services import (
     projects_service,
     shots_service,
     permissions_service,
-    user_service,
 )
 
 from zou.app.mixin import ArgsMixin

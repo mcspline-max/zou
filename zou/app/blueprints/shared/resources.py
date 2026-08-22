@@ -12,11 +12,13 @@ from zou.app.blueprints.previews.resources import (
 from zou.app.blueprints.shared.decorators import (
     require_valid_playlist_share_link,
 )
+from zou.app.models.preview_file import PreviewFile
 from zou.app.blueprints.shared.schemas import (
     CreateGuestCommentSchema,
     CreateGuestSchema,
     EditGuestCommentSchema,
     GuestActionSchema,
+    ReplyGuestCommentSchema,
     UpdateGuestAnnotationsSchema,
 )
 from zou.app.services import (
@@ -70,7 +72,13 @@ class SharedPlaylistResource(MethodView):
         playlist = playlists_service.get_playlist_with_preview_file_revisions(
             share_link["playlist_id"]
         )
-        return playlist_sharing_service.enrich_shots_with_entity_info(playlist)
+        playlist = playlist_sharing_service.enrich_shots_with_entity_info(
+            playlist
+        )
+        playlist["show_revision_selector"] = share_link.get(
+            "show_revision_selector", False
+        )
+        return playlist
 
 
 class SharedPlaylistGuestResource(MethodView):
@@ -299,12 +307,28 @@ class SharedPlaylistCommentsResource(MethodView):
         if not task_status.get("is_client_allowed", False):
             return {"error": "Task status not allowed for guests"}, 400
 
+        # Never trust a client-supplied id to belong to its parent: drop it
+        # rather than let a spoofed id bind the comment to another task's
+        # preview.
+        preview_file_id = (
+            str(body.preview_file_id) if body.preview_file_id else None
+        )
+        if preview_file_id:
+            preview_file = PreviewFile.get(preview_file_id)
+            if (
+                preview_file is None
+                or str(preview_file.task_id) != task_id
+            ):
+                preview_file_id = None
+
         comment = comments_service.create_comment(
             person_id=guest_id,
             task_id=task_id,
             task_status_id=task_status_id,
             text=body.text or "",
             checklist=body.checklist or [],
+            timecode=body.timecode,
+            preview_file_id=preview_file_id,
         )
         return comment, 201
 
@@ -339,6 +363,8 @@ class SharedPlaylistCommentResource(MethodView):
             update_data["checklist"] = body.checklist
         if body.task_status_id is not None:
             update_data["task_status_id"] = str(body.task_status_id)
+        if body.timecode is not None:
+            update_data["timecode"] = body.timecode
         try:
             return playlist_sharing_service.update_guest_comment(
                 comment_id, str(body.guest_id), update_data, token
@@ -367,6 +393,279 @@ class SharedPlaylistCommentResource(MethodView):
                 comment_id, str(body.guest_id), token
             )
             return "", 204
+        except playlist_sharing_service.GuestCommentForbidden:
+            return {"error": "Forbidden"}, 403
+        except playlist_sharing_service.GuestCommentNotFound:
+            return {"error": "Comment not found"}, 404
+
+
+class SharedPlaylistCommentReplyResource(MethodView):
+    """
+    Reply to a comment visible in the shared playlist, as a guest.
+    """
+
+    @require_valid_playlist_share_link()
+    def post(self, token, comment_id):
+        """
+        Reply to a comment as a guest
+        ---
+        description: Add a reply to any comment visible in this shared
+          playlist (not just the guest's own — mirrors a studio member
+          replying to a guest's comment from the studio side).
+        tags:
+          - Playlists
+        parameters:
+          - in: path
+            name: token
+            required: true
+            schema:
+              type: string
+            description: Share link token
+          - in: path
+            name: comment_id
+            required: true
+            schema:
+              type: string
+              format: uuid
+            description: Comment to reply to
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - guest_id
+                  - text
+                properties:
+                  guest_id:
+                    type: string
+                    format: uuid
+                  text:
+                    type: string
+        responses:
+          201:
+            description: Reply created
+            content:
+              application/json:
+                schema:
+                  type: object
+          403:
+            description: Comments disabled for this link, or the guest is
+              not part of this shared playlist
+          404:
+            description: Comment not found, not part of this shared
+              playlist, or not visible to guests
+        """
+        share_link = g.playlist_share_link
+        if not share_link.get("can_comment", True):
+            return {"error": "Comments are disabled for this link"}, 403
+
+        body = validation.validate_request_body(ReplyGuestCommentSchema)
+        try:
+            reply = playlist_sharing_service.reply_to_shared_comment(
+                comment_id, str(body.guest_id), body.text, token
+            )
+            return reply, 201
+        except playlist_sharing_service.GuestCommentForbidden:
+            return {"error": "Forbidden"}, 403
+        except playlist_sharing_service.GuestCommentNotFound:
+            return {"error": "Comment not found"}, 404
+
+
+class SharedPlaylistCommentReplyDetailResource(MethodView):
+    """
+    Edit or delete a single reply, as the guest who wrote it.
+    """
+
+    @require_valid_playlist_share_link()
+    def put(self, token, comment_id, reply_id):
+        """
+        Edit a guest's own reply
+        ---
+        description: Update the text of a reply the same guest previously
+          posted on a comment visible in this shared playlist.
+        tags:
+          - Playlists
+        parameters:
+          - in: path
+            name: token
+            required: true
+            schema:
+              type: string
+          - in: path
+            name: comment_id
+            required: true
+            schema:
+              type: string
+              format: uuid
+          - in: path
+            name: reply_id
+            required: true
+            schema:
+              type: string
+              format: uuid
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - guest_id
+                  - text
+                properties:
+                  guest_id:
+                    type: string
+                    format: uuid
+                  text:
+                    type: string
+        responses:
+          200:
+            description: Reply updated
+          403:
+            description: Comments disabled for this link, the guest is not
+              part of this shared playlist, or the reply belongs to
+              someone else
+          404:
+            description: Comment or reply not found, or not visible
+        """
+        share_link = g.playlist_share_link
+        if not share_link.get("can_comment", True):
+            return {"error": "Comments are disabled for this link"}, 403
+
+        body = validation.validate_request_body(ReplyGuestCommentSchema)
+        try:
+            reply = playlist_sharing_service.edit_shared_comment_reply(
+                comment_id, reply_id, str(body.guest_id), body.text, token
+            )
+            return reply, 200
+        except playlist_sharing_service.GuestCommentForbidden:
+            return {"error": "Forbidden"}, 403
+        except playlist_sharing_service.GuestCommentNotFound:
+            return {"error": "Comment not found"}, 404
+        except playlist_sharing_service.ReplyForbidden:
+            return {"error": "Forbidden"}, 403
+        except playlist_sharing_service.ReplyNotFound:
+            return {"error": "Reply not found"}, 404
+
+    @require_valid_playlist_share_link()
+    def delete(self, token, comment_id, reply_id):
+        """
+        Delete a guest's own reply
+        ---
+        description: Remove a reply the same guest previously posted on a
+          comment visible in this shared playlist.
+        tags:
+          - Playlists
+        parameters:
+          - in: path
+            name: token
+            required: true
+            schema:
+              type: string
+          - in: path
+            name: comment_id
+            required: true
+            schema:
+              type: string
+              format: uuid
+          - in: path
+            name: reply_id
+            required: true
+            schema:
+              type: string
+              format: uuid
+        responses:
+          204:
+            description: Reply deleted
+          403:
+            description: Comments disabled for this link, the guest is not
+              part of this shared playlist, or the reply belongs to
+              someone else
+          404:
+            description: Comment or reply not found, or not visible
+        """
+        share_link = g.playlist_share_link
+        if not share_link.get("can_comment", True):
+            return {"error": "Comments are disabled for this link"}, 403
+
+        body = validation.validate_request_body(GuestActionSchema)
+        try:
+            playlist_sharing_service.delete_shared_comment_reply(
+                comment_id, reply_id, str(body.guest_id), token
+            )
+            return "", 204
+        except playlist_sharing_service.GuestCommentForbidden:
+            return {"error": "Forbidden"}, 403
+        except playlist_sharing_service.GuestCommentNotFound:
+            return {"error": "Comment not found"}, 404
+        except playlist_sharing_service.ReplyForbidden:
+            return {"error": "Forbidden"}, 403
+        except playlist_sharing_service.ReplyNotFound:
+            return {"error": "Reply not found"}, 404
+
+
+class SharedPlaylistCommentAckResource(MethodView):
+    """
+    Toggle a guest's acknowledgement ("like") on a comment visible in the
+    shared playlist.
+    """
+
+    @require_valid_playlist_share_link()
+    def post(self, token, comment_id):
+        """
+        Acknowledge (or un-acknowledge) a comment as a guest
+        ---
+        description: Toggle the given guest's acknowledgement on any
+          comment visible in this shared playlist. Mirrors the studio
+          ack endpoint, scoped to a guest instead of a JWT user.
+        tags:
+          - Playlists
+        parameters:
+          - in: path
+            name: token
+            required: true
+            schema:
+              type: string
+          - in: path
+            name: comment_id
+            required: true
+            schema:
+              type: string
+              format: uuid
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - guest_id
+                properties:
+                  guest_id:
+                    type: string
+                    format: uuid
+        responses:
+          200:
+            description: Acknowledgement toggled
+          403:
+            description: Comments disabled for this link, or the guest is
+              not part of this shared playlist
+          404:
+            description: Comment not found, not part of this shared
+              playlist, or not visible to guests
+        """
+        share_link = g.playlist_share_link
+        if not share_link.get("can_comment", True):
+            return {"error": "Comments are disabled for this link"}, 403
+
+        body = validation.validate_request_body(GuestActionSchema)
+        try:
+            comment = playlist_sharing_service.acknowledge_shared_comment(
+                comment_id, str(body.guest_id), token
+            )
+            return comment, 200
         except playlist_sharing_service.GuestCommentForbidden:
             return {"error": "Forbidden"}, 403
         except playlist_sharing_service.GuestCommentNotFound:
@@ -567,6 +866,54 @@ def _is_task_in_shared_playlist(token, task_id):
         if str(shot.get("preview_file_task_id") or "") == tid:
             return True
     return False
+
+
+class SharedPlaylistTaskRevisionsResource(MethodView):
+    @require_valid_playlist_share_link(with_password=True)
+    def get(self, token, task_id):
+        """
+        List revisions available for a shared playlist's shot
+        ---
+        description: Return every revision (main preview file, one per
+          revision) for a task positioned in this shared playlist. Only
+          served when the share link has show_revision_selector enabled —
+          otherwise a guest only ever sees the pinned revision.
+        tags:
+          - Playlists
+        parameters:
+          - in: path
+            name: token
+            required: true
+            schema:
+              type: string
+            description: Share link token
+          - in: path
+            name: task_id
+            required: true
+            schema:
+              type: string
+              format: uuid
+            description: Task whose revisions to list
+        responses:
+          200:
+            description: Revisions for the task, most recent first
+            content:
+              application/json:
+                schema:
+                  type: array
+                  items:
+                    type: object
+          403:
+            description: Version switching disabled for this link, or the
+              task is not part of this shared playlist
+        """
+        share_link = g.playlist_share_link
+        if not share_link.get("show_revision_selector", False):
+            return {"error": "Version switching disabled for this link"}, 403
+        if not _is_task_in_shared_playlist(token, task_id):
+            return {"error": "Task not part of this shared playlist"}, 403
+        previews = files_service.get_preview_files_for_task(task_id)
+        return [p for p in previews if p.get("position") == 1]
 
 
 class SharedPlaylistPreviewFileResource(MethodView):

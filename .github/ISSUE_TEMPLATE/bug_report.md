@@ -9,8 +9,8 @@ assignees: frankrousseau
 
 **Context**
 
-Studio name: 
-Zou version: 
+Studio name:
+Zou version:
 Zou installation type: (for example: hosted by CGWire, self-hosted, docker etc)
 
 **Describe the bug**

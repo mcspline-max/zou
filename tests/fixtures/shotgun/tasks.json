@@ -15,10 +15,10 @@
     },
     "id": 1,
     "project": {
-      "type": "Project", 
-      "id": 1, 
+      "type": "Project",
+      "id": 1,
       "name": "Cosmos Landraumat"
-    }, 
+    },
     "sg_description": null,
     "sg_sort_order": 40,
     "sg_status_list": "wip",
@@ -47,10 +47,10 @@
     },
     "id": 76,
     "project": {
-      "type": "Project", 
-      "id": 1, 
+      "type": "Project",
+      "id": 1,
       "name": "Cosmos Landraumat"
-    }, 
+    },
     "sg_description": null,
     "sg_sort_order": 60,
     "sg_status_list": "wip",

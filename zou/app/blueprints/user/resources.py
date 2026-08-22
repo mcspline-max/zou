@@ -1,4 +1,4 @@
-from flask import abort, jsonify, request
+from flask import jsonify, request
 from flask.views import MethodView
 
 from zou.app.mixin import ArgsMixin

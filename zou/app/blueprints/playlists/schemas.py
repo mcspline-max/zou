@@ -114,6 +114,13 @@ class CreatePlaylistShareLinkSchema(BaseSchema):
         True,
         description="Whether guests are allowed to comment / annotate",
     )
+    show_revision_selector: bool = Field(
+        False,
+        description=(
+            "Whether guests can switch between revisions of a shot, "
+            "instead of only seeing the one pinned into the playlist"
+        ),
+    )
     password: Optional[str] = Field(
         None,
         description="Optional password required to access the link",
@@ -125,6 +132,25 @@ class CreatePlaylistShareLinkSchema(BaseSchema):
         if v == "":
             return None
         return v
+
+
+class UpdatePlaylistShareLinkSchema(BaseSchema):
+    """
+    Body for updating an existing playlist share link. Every field is
+    optional — only what's passed gets changed.
+    """
+
+    can_comment: Optional[bool] = Field(
+        None,
+        description="Whether guests are allowed to comment / annotate",
+    )
+    show_revision_selector: Optional[bool] = Field(
+        None,
+        description=(
+            "Whether guests can switch between revisions of a shot, "
+            "instead of only seeing the one pinned into the playlist"
+        ),
+    )
 
 
 class InviteShareLinkSchema(BaseSchema):

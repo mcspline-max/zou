@@ -17,7 +17,6 @@ from zou.app.services import (
     shots_service,
     projects_service,
     permissions_service,
-    user_service,
     persons_service,
 )
 

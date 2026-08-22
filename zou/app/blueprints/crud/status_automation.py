@@ -9,7 +9,6 @@ from zou.app.models.project import ProjectStatusAutomationLink
 from zou.app.services import (
     permissions_service,
     status_automations_service,
-    user_service,
 )
 
 

@@ -5,7 +5,7 @@ from sqlalchemy import func
 from zou.app.utils import events
 
 from zou.app.blueprints.crud.base import BaseModelsResource, BaseModelResource
-from zou.app.services import permissions_service, tasks_service, user_service
+from zou.app.services import permissions_service, tasks_service
 
 from zou.app.models.time_spent import TimeSpent
 from zou.app.models.task import Task

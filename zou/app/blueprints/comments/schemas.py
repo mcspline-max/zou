@@ -37,6 +37,16 @@ class CommentCreateSchema(BaseSchema):
     """
 
     task_status_id: str = Field(..., description="Task status UUID")
+    timecode: Optional[float] = Field(
+        None, description="Timecode of the comment in a video"
+    )
+    preview_file_id: Optional[str] = Field(
+        None,
+        description=(
+            "Preview file the comment's timecode was captured against, so "
+            "it only surfaces while that revision is the one being viewed"
+        ),
+    )
     comment: str = Field("", description="Comment text content")
     person_id: str = Field("", description="Author UUID (managers only)")
     created_at: str = Field(

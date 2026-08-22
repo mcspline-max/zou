@@ -27,6 +27,11 @@ class Playlist(db.Model, BaseMixin, SerializerMixin):
     for_client = db.Column(db.Boolean(), default=False, index=True)
     for_entity = db.Column(db.String(10), default="shot", index=True)
     is_for_all = db.Column(db.Boolean, default=False)
+    # Whether the player advances to the next entry on its own when one
+    # finishes (a shot sequence played as an edit) versus staying put as a
+    # static list to browse manually (e.g. a set of unrelated asset
+    # turnarounds). Defaults on to match pre-existing playback behavior.
+    auto_advance = db.Column(db.Boolean(), default=True, nullable=False)
 
     build_jobs = relationship("BuildJob")
 

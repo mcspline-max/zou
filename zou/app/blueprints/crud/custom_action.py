@@ -8,7 +8,6 @@ from zou.app.services.exception import WrongParameterException
 from zou.app.services import (
     custom_actions_service,
     permissions_service,
-    user_service,
 )
 
 

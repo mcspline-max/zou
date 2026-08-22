@@ -118,6 +118,8 @@ def create_comment(
     links=None,
     with_hashtags=True,
     for_client=False,
+    timecode=None,
+    preview_file_id=None,
 ):
     """
     Create a new comment and related: news, notifications and events.
@@ -145,6 +147,8 @@ def create_comment(
         created_at=created_at,
         links=links,
         for_client=for_client,
+        timecode=timecode,
+        preview_file_id=preview_file_id,
     )
 
     if with_hashtags:
@@ -426,6 +430,8 @@ def new_comment(
     created_at="",
     links=None,
     for_client=False,
+    timecode=None,
+    preview_file_id=None,
 ):
     """
     Create a new comment for given object (by default, it considers this object
@@ -464,6 +470,8 @@ def new_comment(
         created_at=created_at_date,
         links=links,
         for_client=for_client,
+        timecode=timecode,
+        preview_file_id=preview_file_id,
     )
 
     comment = comment.serialize(relations=True)
@@ -659,10 +667,14 @@ def get_all_attachment_files_for_task(task_id):
     return fields.serialize_models(attachment_files)
 
 
-def acknowledge_comment(comment_id):
+def acknowledge_comment(comment_id, person_id=None):
     """
-    Add current user to the list of people who acknowledged given comment.
-    If he's already present, remove it.
+    Add the given person (current JWT user by default) to the list of
+    people who acknowledged given comment. If already present, remove it.
+
+    person_id lets a guest-scoped caller (no JWT — see
+    playlist_sharing_service.acknowledge_shared_comment) toggle its own
+    acknowledgement instead of the current user's.
     """
     comment = tasks_service.get_comment_raw(comment_id)
     task = tasks_service.get_task(str(comment.object_id))
@@ -670,7 +682,7 @@ def acknowledge_comment(comment_id):
     # Reload the person through the session: appending the cached
     # current_user instance to the relationship raises an identity
     # conflict when another instance of the row lives in the session.
-    current_user_id = persons_service.get_current_user()["id"]
+    current_user_id = person_id or persons_service.get_current_user()["id"]
     current_user = Person.get(current_user_id)
 
     acknowledgements = fields.serialize_orm_arrays(comment.acknowledgements)
@@ -774,6 +786,51 @@ def reply_comment(comment_id, text, person_id=None, files=None):
         task, comment_dict, reply
     )
     # Embed the author so the just-posted reply renders with name and avatar.
+    reply["person"] = persons_service.get_short_person(reply["person_id"])
+    return reply
+
+
+def edit_reply(comment_id, reply_id, text):
+    """
+    Update the text of a reply on given comment. Re-resolves mentions
+    against the new text, same as reply_comment does when it's created.
+    """
+    comment = tasks_service.get_comment_raw(comment_id)
+    task = tasks_service.get_task(comment.object_id)
+
+    replies = list(comment.replies or [])
+    reply = None
+    for candidate in replies:
+        if candidate["id"] == reply_id:
+            candidate["text"] = text
+            candidate["mentions"] = get_comment_mention_ids(
+                task["project_id"], text
+            )
+            candidate["department_mentions"] = (
+                get_comment_department_mention_ids(task["project_id"], text)
+            )
+            reply = candidate
+            break
+    if reply is None:
+        raise ReplyNotFoundException
+
+    comment.update({"replies": replies})
+    tasks_service.clear_comment_cache(comment_id)
+    # "comment:update", not a new "comment:edit-reply" type: that's the
+    # event App.vue/Task.vue already listen for to refetch and replace one
+    # comment in place (NEW_TASK_COMMENT_END is an upsert by id), so this
+    # reaches every open studio view of the task — including PlaylistPlayer,
+    # which reads from the same Vuex taskComments App.vue's handler updates
+    # — with no new frontend listener needed.
+    events.emit(
+        "comment:update",
+        {
+            "task_id": task["id"],
+            "comment_id": comment_id,
+            "reply_id": reply_id,
+        },
+        project_id=task["project_id"],
+    )
     reply["person"] = persons_service.get_short_person(reply["person_id"])
     return reply
 

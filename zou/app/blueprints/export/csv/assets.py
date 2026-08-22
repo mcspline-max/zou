@@ -7,7 +7,6 @@ from zou.app.services import (
     assets_service,
     projects_service,
     permissions_service,
-    user_service,
     tasks_service,
     persons_service,
 )

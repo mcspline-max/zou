@@ -10,7 +10,6 @@ from zou.app.services import (
     tasks_service,
     persons_service,
     permissions_service,
-    user_service,
 )
 
 from zou.app.utils import date_helpers
