@@ -78,8 +78,11 @@ def _remove_older_than(model, date_column, days_old):
 
 def remove_comment(comment_id):
     """
-    Remove a comment from database and everything related (notifs, news, and
-    preview files)
+    Remove a comment from database and everything related (notifs, news and
+    attachment files). Preview files stay: preview_file_id/previews just tag
+    which revision a comment is about, and a revision must only ever be
+    removed through an explicit "delete this revision" action, never as a
+    side effect of deleting the comment that happens to mention it.
     """
     comment = Comment.get(comment_id)
     if comment is None:
@@ -95,17 +98,11 @@ def remove_comment(comment_id):
         news.delete()
 
     if comment.preview_file_id is not None:
-        preview_file = PreviewFile.get(comment.preview_file_id)
         comment.preview_file_id = None
         comment.save()
-        remove_preview_file(preview_file)
 
-    previews = [preview for preview in comment.previews]
     attachments = [attachment for attachment in comment.attachment_files]
     comment.delete()
-
-    for preview in previews:
-        remove_preview_file(preview)
 
     for attachment in attachments:
         remove_attachment_file(attachment)
