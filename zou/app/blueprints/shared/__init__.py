@@ -4,6 +4,7 @@ from zou.app.utils.api import configure_api_from_blueprint
 
 from zou.app.blueprints.shared.resources import (
     SharedPlaylistResource,
+    SharedPlaylistOrganisationLogoResource,
     SharedPlaylistGuestResource,
     SharedPlaylistCommentsResource,
     SharedPlaylistCommentResource,
@@ -29,6 +30,10 @@ routes = [
     (
         "/shared/playlists/<token>",
         SharedPlaylistResource,
+    ),
+    (
+        "/shared/playlists/<token>/organisation/logo",
+        SharedPlaylistOrganisationLogoResource,
     ),
     (
         "/shared/playlists/<token>/guest",

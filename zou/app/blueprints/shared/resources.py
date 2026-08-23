@@ -24,6 +24,7 @@ from zou.app.blueprints.shared.schemas import (
 from zou.app.services import (
     comments_service,
     files_service,
+    persons_service,
     playlist_sharing_service,
     playlists_service,
     preview_files_service,
@@ -79,6 +80,51 @@ class SharedPlaylistResource(MethodView):
             "show_revision_selector", False
         )
         return playlist
+
+
+class SharedPlaylistOrganisationLogoResource(MethodView):
+    @require_valid_playlist_share_link()
+    def get(self, token):
+        """
+        Get shared playlist organisation logo
+        ---
+        description: Serve the studio's logo (organisation thumbnail) when
+          the share token is valid, so the shared player header can brand
+          itself without a JWT session.
+        tags:
+          - Playlists
+        parameters:
+          - in: path
+            name: token
+            required: true
+            schema:
+              type: string
+            description: Share link token
+        responses:
+          200:
+            description: Organisation logo image
+            content:
+              image/png:
+                schema:
+                  type: string
+                  format: binary
+          404:
+            description: Organisation has no logo set
+            content:
+              application/json:
+                schema:
+                  type: object
+                  properties:
+                    error:
+                      type: string
+        """
+        organisation = persons_service.get_organisation()
+        if not organisation["has_avatar"]:
+            raise PreviewFileNotFoundException
+        try:
+            return send_picture_file("thumbnails", organisation["id"])
+        except FileNotFound:
+            raise PreviewFileNotFoundException
 
 
 class SharedPlaylistGuestResource(MethodView):

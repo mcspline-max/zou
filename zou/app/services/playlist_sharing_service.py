@@ -725,15 +725,21 @@ _SHOT_LIKE_ENTITY_TYPE_NAMES = frozenset(
 
 def _enrich_shared_playlist_project_line(playlist_dict):
     """
-    Inline the project name and fps on the playlist: a shared viewer has no
-    authenticated access to the project store.
+    Inline the project name, fps and episode name on the playlist: a shared
+    viewer has no authenticated access to the project or entity stores.
     """
     project_id = playlist_dict.get("project_id")
-    if not project_id:
-        return
-    project = projects_service.get_project(str(project_id))
-    playlist_dict["project_fps"] = project.get("fps")
-    playlist_dict["project_name"] = project.get("name")
+    if project_id:
+        project = projects_service.get_project(str(project_id))
+        playlist_dict["project_fps"] = project.get("fps")
+        playlist_dict["project_name"] = project.get("name")
+
+    episode_id = playlist_dict.get("episode_id")
+    playlist_dict["episode_name"] = None
+    if episode_id:
+        episode = Entity.query.get(episode_id)
+        if episode is not None:
+            playlist_dict["episode_name"] = episode.name
 
 
 def _load_task_styling_by_task_id(task_ids):
@@ -950,6 +956,7 @@ def get_shared_playlist_context(token):
     playlist = playlists_service.get_playlist(share_link["playlist_id"])
     project_id = playlist["project_id"]
     project = projects_service.get_project(project_id)
+    organisation = persons_service.get_organisation()
 
     task_types = projects_service.get_project_task_types(project_id)
     task_statuses = projects_service.get_project_task_statuses(project_id)
@@ -979,6 +986,10 @@ def get_shared_playlist_context(token):
             "ratio": project.get("ratio"),
             "resolution": project.get("resolution"),
             "team": [],  # required by Kitsu
+        },
+        "organisation": {
+            "name": organisation["name"],
+            "has_avatar": organisation["has_avatar"],
         },
         # Task types are sent without `department_id` on purpose: the shared
         # client never populates the department map, and several widgets
