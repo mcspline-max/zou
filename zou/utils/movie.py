@@ -230,7 +230,7 @@ def normalize_encoding(
         format="mp4",
         r=fps,
         b=b,
-        preset="slow",
+        preset="fast",
         vcodec="libx264",
         movflags="+faststart",
         x264opts=f"keyint={keyframes}:scenecut=0",
