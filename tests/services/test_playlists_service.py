@@ -176,6 +176,75 @@ class PlaylistsServiceTestCase(ApiDBTestCase):
             ["Test all playlist"],
         )
 
+    def test_the_edits_bucket_holds_the_cross_episode_edit_playlists(self):
+        self.generate_fixture_playlists()
+        self.generate_fixture_playlist("Every edit", for_entity="edit")
+        # Pinned to one episode: it belongs under that episode, not in the
+        # bucket meant for playlists that can hold any episode's edits.
+        self.generate_fixture_playlist(
+            "Edit of episode 2",
+            for_entity="edit",
+            episode_id=self.episode_2.id,
+        )
+        # Not an edit at all, so it stays in the main pack.
+        self.generate_fixture_playlist("Main pack asset", for_entity="asset")
+
+        playlists = playlists_service.all_playlists_for_episode(
+            self.project.id, "edits"
+        )
+
+        self.assertEqual(
+            [playlist["name"] for playlist in playlists], ["Every edit"]
+        )
+
+    def test_an_episode_keeps_holding_its_own_edit_playlist(self):
+        self.generate_fixture_playlist("Every edit", for_entity="edit")
+        self.generate_fixture_playlist(
+            "Edit of episode 2",
+            for_entity="edit",
+            episode_id=self.episode_2.id,
+        )
+
+        playlists = playlists_service.all_playlists_for_episode(
+            self.project.id, self.episode_2.id
+        )
+
+        self.assertEqual(
+            [playlist["name"] for playlist in playlists], ["Edit of episode 2"]
+        )
+
+    def test_the_main_pack_leaves_the_edit_playlists_to_the_edits_bucket(self):
+        """
+        A cross-episode edit playlist carries no episode_id, which used to
+        be enough to land it in the main pack as well as the edits bucket.
+        """
+        self.generate_fixture_playlist("Every edit", for_entity="edit")
+        self.generate_fixture_playlist("Main pack asset", for_entity="asset")
+
+        playlists = playlists_service.all_playlists_for_episode(
+            self.project.id, "main"
+        )
+
+        self.assertEqual(
+            [playlist["name"] for playlist in playlists], ["Main pack asset"]
+        )
+
+    def test_the_edits_bucket_is_scoped_to_its_production(self):
+        self.generate_fixture_playlist("Edit here", for_entity="edit")
+        self.generate_fixture_playlist(
+            "Edit elsewhere",
+            project_id=self.project_standard.id,
+            for_entity="edit",
+        )
+
+        playlists = playlists_service.all_playlists_for_episode(
+            self.project.id, "edits"
+        )
+
+        self.assertEqual(
+            [playlist["name"] for playlist in playlists], ["Edit here"]
+        )
+
     def test_generate_temp_playlist(self):
         self.generate_fixture_preview_files()
         task_id = self.task.id

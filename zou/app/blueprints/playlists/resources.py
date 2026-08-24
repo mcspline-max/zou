@@ -151,7 +151,7 @@ class EpisodePlaylistsResource(MethodView, ArgsMixin):
             schema:
               type: string
               format: uuid
-            description: Episode unique identifier or special value (main, all)
+            description: Episode unique identifier or special value (main, all, edits)
             example: a24a6ea4-ce75-4665-a070-57453082c25
         responses:
           200:
@@ -183,7 +183,7 @@ class EpisodePlaylistsResource(MethodView, ArgsMixin):
         page = self.get_page()
         sort_by = self.get_sort_by()
         task_type_id = self.get_text_parameter("task_type_id")
-        if episode_id not in ["main", "all"]:
+        if episode_id not in ["main", "all", "edits"]:
             shots_service.get_episode(episode_id)
         return playlists_service.all_playlists_for_episode(
             project_id,

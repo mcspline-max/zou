@@ -151,10 +151,20 @@ def all_playlists_for_episode(
     if task_type_id is not None and len(task_type_id) > 0:
         query = query.filter(Playlist.task_type_id == task_type_id)
 
+    # The three pseudo-episodes all hold playlists that belong to no single
+    # episode (episode_id is null); what separates them is the kind of
+    # playlist. Edit playlists get their own bucket so they stay out of the
+    # main pack, which would otherwise show them too.
     if episode_id == "main":
         query = (
             query.filter(Playlist.episode_id == None)
             .filter(Playlist.project_id == project_id)
+            .filter(
+                or_(
+                    Playlist.for_entity.is_(None),
+                    Playlist.for_entity != "edit",
+                )
+            )
             .filter(
                 or_(
                     Playlist.is_for_all.is_(None),
@@ -166,7 +176,22 @@ def all_playlists_for_episode(
         query = (
             query.filter(Playlist.episode_id == None)
             .filter(Playlist.project_id == project_id)
+            .filter(
+                or_(
+                    Playlist.for_entity.is_(None),
+                    Playlist.for_entity != "edit",
+                )
+            )
             .filter(Playlist.is_for_all == True)
+        )
+    elif episode_id == "edits":
+        # Cross-episode edit playlists: the ones able to hold edits from
+        # any episode. An edit playlist pinned to a single episode stays
+        # under that episode, exactly like a shot playlist does.
+        query = (
+            query.filter(Playlist.episode_id == None)
+            .filter(Playlist.project_id == project_id)
+            .filter(Playlist.for_entity == "edit")
         )
     else:
         query = query.filter(Playlist.episode_id == episode_id).filter(
