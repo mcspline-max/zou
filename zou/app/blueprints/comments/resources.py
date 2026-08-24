@@ -5,7 +5,9 @@ from flask_jwt_extended import jwt_required
 from zou.app.mixin import ArgsMixin
 from zou.app.models.preview_file import PreviewFile
 from zou.app.services.exception import (
+    AnnotationLockTimeoutException,
     AttachmentFileNotFoundException,
+    CommentNotFoundException,
     WrongParameterException,
 )
 from zou.app.utils import permissions, date_helpers, validation
@@ -13,6 +15,7 @@ from zou.app.blueprints.comments.schemas import (
     CommentCreateSchema,
     CommentReplySchema,
     MoveCommentSchema,
+    UpdateCommentAnnotationSchema,
 )
 
 from zou.app.services import (
@@ -21,6 +24,7 @@ from zou.app.services import (
     deletion_service,
     entities_service,
     persons_service,
+    preview_files_service,
     tasks_service,
     permissions_service,
 )
@@ -161,6 +165,55 @@ class AckCommentResource(MethodView):
         return comments_service.acknowledge_comment(comment_id)
 
 
+class UpdateCommentAnnotationResource(MethodView):
+
+    @jwt_required()
+    def put(self, comment_id):
+        """
+        Update comment annotation
+        ---
+        description: Apply an additions/updates/deletions diff (same shape
+          as the old preview-level update-annotations route) to a single
+          comment's own annotation, while its author is still drawing.
+          Only the comment's author may call this.
+        tags:
+          - Comments
+        parameters:
+          - in: path
+            name: comment_id
+            required: true
+            schema:
+              type: string
+              format: uuid
+            description: Comment unique identifier
+        responses:
+          200:
+            description: Updated comment with the new annotation
+          403:
+            description: Not the comment's author
+          404:
+            description: Comment not found
+          503:
+            description: Could not acquire the annotation lock
+        """
+        body = validation.validate_request_body(UpdateCommentAnnotationSchema)
+        current_user = persons_service.get_current_user()
+        try:
+            return preview_files_service.apply_comment_annotation_diff(
+                comment_id,
+                current_user["id"],
+                additions=body.additions,
+                updates=body.updates,
+                deletions=body.deletions,
+            )
+        except CommentNotFoundException:
+            return {"error": "Comment not found"}, 404
+        except AnnotationLockTimeoutException:
+            return {
+                "error": "Could not acquire annotation lock for comment"
+            }, 503
+
+
 class CommentTaskResource(MethodView):
 
     @jwt_required()
@@ -268,6 +321,7 @@ class CommentTaskResource(MethodView):
             for_client,
             timecode,
             preview_file_id,
+            annotation,
         ) = self.get_arguments()
 
         try:
@@ -304,6 +358,10 @@ class CommentTaskResource(MethodView):
                 or str(preview_file.task_id) != str(task_id)
             ):
                 preview_file_id = None
+        # An annotation with nothing to attach it to (no revision, no
+        # timecode) has no meaning: drop it rather than store an orphan.
+        if not preview_file_id or timecode is None:
+            annotation = None
         comment = comments_service.create_comment(
             person_id,
             task_id,
@@ -316,6 +374,7 @@ class CommentTaskResource(MethodView):
             for_client=for_client,
             timecode=timecode,
             preview_file_id=preview_file_id,
+            annotation=annotation,
         )
         return comment, 201
 
@@ -331,6 +390,7 @@ class CommentTaskResource(MethodView):
             body.for_client,
             body.timecode,
             body.preview_file_id,
+            body.annotation,
         )
 
 

@@ -74,6 +74,12 @@ class CreateGuestCommentSchema(BaseSchema):
             "it only surfaces while that revision is the one being viewed"
         ),
     )
+    annotation: Optional[dict] = Field(
+        None,
+        description=(
+            "Drawing made at the comment's timecode, owned by this comment"
+        ),
+    )
 
 
 class EditGuestCommentSchema(BaseSchema):
@@ -101,6 +107,9 @@ class EditGuestCommentSchema(BaseSchema):
             "enforced server-side"
         ),
     )
+    annotation: Optional[dict] = Field(
+        None, description="Full replacement of the comment's own annotation"
+    )
 
 
 class ReplyGuestCommentSchema(BaseSchema):
@@ -127,25 +136,23 @@ class GuestActionSchema(BaseSchema):
     )
 
 
-class UpdateGuestAnnotationsSchema(BaseSchema):
+class UpdateGuestCommentAnnotationSchema(BaseSchema):
     """
-    Body for the shared playlist annotation diff endpoint.
+    Body for the shared-playlist, comment-scoped annotation diff
+    endpoint: applies to one guest-owned comment's own annotation while
+    its author is still drawing.
     """
 
     guest_id: UUID = Field(..., description="Guest unique identifier")
-    preview_file_id: UUID = Field(
-        ...,
-        description="Preview file the diff applies to",
-    )
     additions: Optional[List[Any]] = Field(
         None,
-        description="Annotations to add",
+        description="Objects to add",
     )
     updates: Optional[List[Any]] = Field(
         None,
-        description="Annotations to update in place",
+        description="Objects to update in place, matched by id",
     )
     deletions: Optional[List[Any]] = Field(
         None,
-        description="Annotation identifiers to remove",
+        description="Object identifiers to remove",
     )

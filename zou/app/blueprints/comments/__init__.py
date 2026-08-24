@@ -14,10 +14,15 @@ from zou.app.blueprints.comments.resources import (
     TaskAttachmentFiles,
     ReplyCommentResource,
     DeleteReplyCommentResource,
+    UpdateCommentAnnotationResource,
 )
 
 routes = [
     ("/data/tasks/<task_id>/comments/<comment_id>/ack", AckCommentResource),
+    (
+        "/actions/comments/<comment_id>/update-annotation",
+        UpdateCommentAnnotationResource,
+    ),
     (
         "/data/tasks/<task_id>/comments/<comment_id>/reply",
         ReplyCommentResource,

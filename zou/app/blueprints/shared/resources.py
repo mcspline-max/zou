@@ -19,7 +19,7 @@ from zou.app.blueprints.shared.schemas import (
     EditGuestCommentSchema,
     GuestActionSchema,
     ReplyGuestCommentSchema,
-    UpdateGuestAnnotationsSchema,
+    UpdateGuestCommentAnnotationSchema,
 )
 from zou.app.services import (
     comments_service,
@@ -31,6 +31,8 @@ from zou.app.services import (
     tasks_service,
 )
 from zou.app.services.exception import (
+    AnnotationLockTimeoutException,
+    CommentNotFoundException,
     PreviewFileNotFoundException,
     WrongParameterException,
 )
@@ -367,6 +369,11 @@ class SharedPlaylistCommentsResource(MethodView):
             ):
                 preview_file_id = None
 
+        # Same rule as the studio endpoint: an annotation needs a revision
+        # and a timecode to attach to, or it's dropped.
+        annotation = body.annotation
+        if not preview_file_id or body.timecode is None:
+            annotation = None
         comment = comments_service.create_comment(
             person_id=guest_id,
             task_id=task_id,
@@ -375,6 +382,7 @@ class SharedPlaylistCommentsResource(MethodView):
             checklist=body.checklist or [],
             timecode=body.timecode,
             preview_file_id=preview_file_id,
+            annotation=annotation,
         )
         return comment, 201
 
@@ -411,6 +419,8 @@ class SharedPlaylistCommentResource(MethodView):
             update_data["task_status_id"] = str(body.task_status_id)
         if body.timecode is not None:
             update_data["timecode"] = body.timecode
+        if body.annotation is not None:
+            update_data["annotation"] = body.annotation
         try:
             return playlist_sharing_service.update_guest_comment(
                 comment_id, str(body.guest_id), update_data, token
@@ -804,16 +814,16 @@ class SharedPlaylistAttachmentFileResource(MethodView):
             return {"error": "Attachment not found"}, 404
 
 
-class SharedPlaylistAnnotationsResource(MethodView):
+class SharedPlaylistCommentAnnotationResource(MethodView):
     @require_valid_playlist_share_link()
-    def put(self, token):
+    def put(self, token, comment_id):
         """
-        Update guest annotations for a preview file
+        Update guest comment annotation
         ---
-        description: Update preview file annotations in the context of a shared
-          playlist. Reuses the same additions/updates/deletions diff format as
-          the manager-facing /actions/preview-files/<id>/update-annotations
-          route, so concurrent edits stay safe via the Redis lock.
+        description: Apply an additions/updates/deletions diff (same shape
+          the old preview-level update-annotations route used) to a single
+          guest-owned comment's own annotation, while its author is still
+          drawing. Only the comment's own author may call this.
         tags:
           - Playlists
         parameters:
@@ -823,81 +833,49 @@ class SharedPlaylistAnnotationsResource(MethodView):
             schema:
               type: string
             description: Share link token
-        requestBody:
-          required: true
-          content:
-            application/json:
-              schema:
-                type: object
-                required:
-                  - guest_id
-                  - preview_file_id
-                properties:
-                  guest_id:
-                    type: string
-                    format: uuid
-                  preview_file_id:
-                    type: string
-                    format: uuid
-                  additions:
-                    type: array
-                    items:
-                      type: object
-                  updates:
-                    type: array
-                    items:
-                      type: object
-                  deletions:
-                    type: array
-                    items:
-                      type: string
-                      format: uuid
+          - in: path
+            name: comment_id
+            required: true
+            schema:
+              type: string
+              format: uuid
+            description: Comment unique identifier
         responses:
           200:
-            description: Updated preview file with the new annotations
-            content:
-              application/json:
-                schema:
-                  type: object
-          400:
-            description: Missing required body fields
+            description: Updated comment with the new annotation
           403:
             description: Annotations disabled for this share link, or the
-              preview file is not part of the shared playlist
+              comment does not belong to this guest / playlist
+          404:
+            description: Comment not found
         """
         share_link = g.playlist_share_link
         if not share_link.get("can_comment", True):
             return {"error": "Annotations are disabled"}, 403
 
-        body = validation.validate_request_body(UpdateGuestAnnotationsSchema)
-        guest_id = str(body.guest_id)
-        preview_file_id = str(body.preview_file_id)
-        additions = body.additions or []
-        updates = body.updates or []
-        deletions = body.deletions or []
-
-        try:
-            playlist_sharing_service.get_guest_for_share_link(
-                guest_id, share_link
-            )
-        except Exception:
-            return {"error": "Guest not part of this shared playlist"}, 403
-
-        if not playlist_sharing_service.is_preview_file_in_shared_playlist(
-            token, preview_file_id
-        ):
-            raise permissions.PermissionDenied
-
-        preview_file = files_service.get_preview_file(preview_file_id)
-        task = tasks_service.get_task(preview_file["task_id"])
-        return preview_files_service.update_preview_file_annotations(
-            guest_id,
-            task["project_id"],
-            preview_file_id,
-            additions=additions,
-            updates=updates,
-            deletions=deletions,
+        body = validation.validate_request_body(
+            UpdateGuestCommentAnnotationSchema
         )
+        try:
+            return playlist_sharing_service.update_guest_comment_annotation(
+                comment_id,
+                str(body.guest_id),
+                token,
+                additions=body.additions or [],
+                updates=body.updates or [],
+                deletions=body.deletions or [],
+            )
+        except playlist_sharing_service.GuestCommentForbidden:
+            return {"error": "Forbidden"}, 403
+        except (
+            playlist_sharing_service.GuestCommentNotFound,
+            CommentNotFoundException,
+        ):
+            return {"error": "Comment not found"}, 404
+        except AnnotationLockTimeoutException:
+            return {
+                "error": "Could not acquire annotation lock for comment"
+            }, 503
 
 
 def _is_task_in_shared_playlist(token, task_id):

@@ -26,6 +26,7 @@ from zou.app.services import (
     sync_service,
     tasks_service,
 )
+from zou.app.models.comment import Comment
 from zou.app.models.entity import Entity
 from zou.app.models.person import Person
 from zou.app.models.preview_file import PreviewFile
@@ -1189,6 +1190,136 @@ def normalize_annotation_times(project_id=None, dry_run=False):
         print(
             f"{changed_count}/{scanned_count} annotated preview files "
             f"{'need normalization' if dry_run else 'normalized'}."
+        )
+
+
+def backfill_annotation_comments(project_id=None, dry_run=False):
+    """
+    One-time migration: turn every entry of preview_file.annotations (the
+    old shared, per-time-bucket annotation storage) into its own Comment
+    row carrying an `annotation`. A time bucket that mixes strokes from
+    several people is split by `drawing.objects[].createdBy`, one comment
+    per author, so each drawing ends up owned by exactly one person —
+    the property the rest of this refactor relies on.
+
+    Idempotent: an (preview_file_id, timecode, person_id) combination
+    that already has an annotated comment is skipped, so running this
+    twice does not duplicate comments. preview_file.annotations itself
+    is left untouched (inert historical backup).
+    """
+    with app.app_context():
+        query = PreviewFile.query.filter(
+            PreviewFile.annotations.isnot(None)
+        ).order_by(PreviewFile.created_at.asc())
+        if project_id is not None:
+            query = query.join(Task).filter(Task.project_id == project_id)
+
+        previews_scanned = 0
+        entries_scanned = 0
+        comments_created = 0
+        comments_skipped_existing = 0
+        entries_skipped_no_author = 0
+
+        for preview_file in query:
+            if not preview_file.annotations:
+                continue
+            previews_scanned += 1
+            preview_file_id = str(preview_file.id)
+            task = Task.get(preview_file.task_id)
+            if task is None:
+                print(
+                    f"Preview file {preview_file_id} has no task, skipping."
+                )
+                continue
+
+            for entry in preview_file.annotations:
+                entries_scanned += 1
+                objects = (entry.get("drawing") or {}).get("objects", []) or []
+                if not objects:
+                    continue
+                time_value = entry.get("time")
+                if time_value is None:
+                    continue
+
+                objects_by_author = {}
+                for drawing_object in objects:
+                    author_id = drawing_object.get("createdBy")
+                    objects_by_author.setdefault(author_id, []).append(
+                        drawing_object
+                    )
+
+                for author_id, author_objects in objects_by_author.items():
+                    person_id = author_id
+                    if person_id is not None and Person.get(person_id) is None:
+                        person_id = None
+                    if person_id is None:
+                        person_id = (
+                            str(preview_file.person_id)
+                            if preview_file.person_id
+                            else None
+                        )
+                    if person_id is None:
+                        entries_skipped_no_author += 1
+                        print(
+                            f"Preview file {preview_file_id}: no resolvable "
+                            f"author for {len(author_objects)} object(s) at "
+                            f"time={time_value}, skipping."
+                        )
+                        continue
+
+                    existing = Comment.query.filter_by(
+                        preview_file_id=preview_file.id,
+                        timecode=time_value,
+                        person_id=person_id,
+                    ).filter(Comment.annotation.isnot(None)).first()
+                    if existing is not None:
+                        comments_skipped_existing += 1
+                        continue
+
+                    annotation = {
+                        "time": time_value,
+                        "frame": entry.get("frame"),
+                        "width": entry.get("width"),
+                        "height": entry.get("height"),
+                        "drawing": {"objects": author_objects},
+                    }
+
+                    if dry_run:
+                        comments_created += 1
+                        print(
+                            f"Preview file {preview_file_id}: would create "
+                            f"comment for person={person_id} time={time_value} "
+                            f"({len(author_objects)} object(s))."
+                        )
+                        continue
+
+                    try:
+                        Comment.create(
+                            object_id=task.id,
+                            object_type="Task",
+                            person_id=person_id,
+                            text="",
+                            checklist=[],
+                            preview_file_id=preview_file.id,
+                            timecode=time_value,
+                            annotation=annotation,
+                        )
+                        comments_created += 1
+                    except Exception as e:
+                        print(
+                            f"Preview file {preview_file_id}: failed to "
+                            f"create comment for person={person_id} "
+                            f"time={time_value}: {e}"
+                        )
+
+        print(
+            f"{previews_scanned} preview file(s) scanned, "
+            f"{entries_scanned} annotation entries scanned, "
+            f"{comments_created} comment(s) "
+            f"{'would be created' if dry_run else 'created'}, "
+            f"{comments_skipped_existing} already backfilled, "
+            f"{entries_skipped_no_author} object group(s) skipped "
+            f"(no resolvable author)."
         )
 
 

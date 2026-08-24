@@ -940,13 +940,21 @@ def _build_preview_map_for_comments(comment_ids, is_client=False):
     Return the previews attached to each comment. Clients never get the
     previews of a revision that is not published to them.
     """
+    # Local import: preview_files_service imports this module at module
+    # level, so importing it up top here would be circular.
+    from zou.app.services import preview_files_service
+
     preview_map = {}
     query = (
         PreviewFile.query.join(CommentPreviewLink)
         .filter(CommentPreviewLink.comment.in_(comment_ids))
         .add_columns(CommentPreviewLink.comment)
     )
-    for preview, comment_id in query.all():
+    rows = query.all()
+    annotations_map = preview_files_service.get_preview_file_annotations_map(
+        str(preview.id) for preview, _ in rows
+    )
+    for preview, comment_id in rows:
         comment_id = str(comment_id)
         if comment_id not in preview_map:
             preview_map[comment_id] = []
@@ -971,7 +979,7 @@ def _build_preview_map_for_comments(comment_ids, is_client=False):
                     "validation_status": validation_status,
                     "original_name": preview.original_name,
                     "position": preview.position,
-                    "annotations": preview.annotations,
+                    "annotations": annotations_map.get(str(preview.id), []),
                 }
             )
     return preview_map

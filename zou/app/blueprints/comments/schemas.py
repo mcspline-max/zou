@@ -19,6 +19,22 @@ class CommentReplySchema(BaseSchema):
     text: Optional[str] = Field("", description="Reply text content")
 
 
+class UpdateCommentAnnotationSchema(BaseSchema):
+    """
+    Body for the incremental additions/updates/deletions diff applied to
+    a single comment's own annotation while its author is still drawing
+    (same shape the old preview-level update-annotations route used).
+    """
+
+    additions: list = Field(default_factory=list, description="Objects added")
+    updates: list = Field(
+        default_factory=list, description="Objects replaced, matched by id"
+    )
+    deletions: list = Field(
+        default_factory=list, description="Objects removed, matched by id"
+    )
+
+
 class MoveCommentSchema(BaseSchema):
     """
     Body for moving a comment to another task of the same entity.
@@ -58,6 +74,14 @@ class CommentCreateSchema(BaseSchema):
     links: list = Field(default_factory=list, description="Linked URLs")
     for_client: bool = Field(
         False, description="Make the comment visible to clients"
+    )
+    annotation: Optional[dict] = Field(
+        None,
+        description=(
+            "Drawing made at the comment's timecode, own by this comment "
+            "(see comments/:id/annotation for incremental updates while "
+            "still drawing)"
+        ),
     )
 
     @field_validator("checklist", "links", mode="before")

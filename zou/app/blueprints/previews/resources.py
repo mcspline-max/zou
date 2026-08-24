@@ -12,7 +12,6 @@ from zou.app import config
 from zou.app.mixin import ArgsMixin
 from zou.app.utils import validation as validation_utils
 from zou.app.blueprints.previews.schemas import (
-    AnnotationsUpdateSchema,
     ExtractAnnotatedFrameSchema,
     PreviewFileUploadSchema,
     PreviewFilePositionSchema,
@@ -1654,107 +1653,6 @@ class UpdatePreviewPositionResource(MethodView, ArgsMixin):
             preview_file_id, body.position
         )
 
-
-class UpdateAnnotationsResource(MethodView, ArgsMixin):
-
-    @jwt_required()
-    def put(self, preview_file_id):
-        """
-        Update preview annotations
-        ---
-        description: Allow to modify the annotations stored at the preview level.
-          Modifications are applied via three fields, additions to give all the
-          annotations that need to be added, updates that list annotations that
-          needs to be modified, and deletions to list the IDs of annotations that
-          needs to be removed.
-        tags:
-          - Previews
-        parameters:
-          - in: path
-            name: preview_file_id
-            required: true
-            schema:
-              type: string
-              format: uuid
-            description: Preview file unique identifier
-            example: a24a6ea4-ce75-4665-a070-57453082c25
-        requestBody:
-          required: true
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  additions:
-                    type: array
-                    description: Annotations to add
-                    items:
-                      type: object
-                    example: [{"type": "drawing", "x": 100, "y": 200}]
-                  updates:
-                    type: array
-                    description: Annotations to update
-                    items:
-                      type: object
-                    example: [{"id": "uuid", "x": 150, "y": 250}]
-                  deletions:
-                    type: array
-                    description: Annotation IDs to remove
-                    items:
-                      type: string
-                      format: uuid
-                    example: ["a24a6ea4-ce75-4665-a070-57453082c25"]
-        responses:
-          200:
-            description: Preview annotations updated
-            content:
-              application/json:
-                schema:
-                  type: object
-                  properties:
-                    id:
-                      type: string
-                      format: uuid
-                      description: Preview file unique identifier
-                      example: a24a6ea4-ce75-4665-a070-57453082c25
-                    annotations:
-                      type: array
-                      description: Updated annotations
-                      items:
-                        type: object
-        """
-        preview_file = files_service.get_preview_file(preview_file_id)
-        task = tasks_service.get_task(preview_file["task_id"])
-        permissions_service.check_project_access(task["project_id"])
-        is_manager = permissions.has_manager_permissions()
-        is_client = permissions.has_client_permissions()
-        is_supervisor_allowed = False
-        if permissions.has_supervisor_permissions():
-            user_departments = persons_service.get_current_user(
-                relations=True
-            )["departments"]
-            if (
-                user_departments == []
-                or tasks_service.get_task_type(task["task_type_id"])[
-                    "department_id"
-                ]
-                in user_departments
-            ):
-                is_supervisor_allowed = True
-
-        if not (is_manager or is_client or is_supervisor_allowed):
-            raise permissions.PermissionDenied
-
-        body = validation_utils.validate_request_body(AnnotationsUpdateSchema)
-        user = persons_service.get_current_user()
-        return preview_files_service.update_preview_file_annotations(
-            user["id"],
-            task["project_id"],
-            preview_file_id,
-            additions=body.additions,
-            updates=body.updates,
-            deletions=body.deletions,
-        )
 
 
 class RunningPreviewFiles(MethodView, ArgsMixin):

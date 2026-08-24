@@ -15,8 +15,9 @@ from sqlalchemy.orm.exc import ObjectDeletedError, StaleDataError
 
 from zou.app import config
 from zou.app.stores import config_store, file_store
-from zou.app.stores.redis_lock import with_preview_file_lock
+from zou.app.stores.redis_lock import with_comment_annotation_lock
 
+from zou.app.models.comment import Comment
 from zou.app.models.entity import Entity
 from zou.app.models.preview_file import PreviewFile
 from zou.app.models.project import Project
@@ -42,12 +43,14 @@ from zou.app.utils import (
 from zou.app.services.exception import (
     AnnotationLockTimeoutException,
     AnnotationNotFoundException,
+    CommentNotFoundException,
     WrongParameterException,
     PreviewFileNotFoundException,
     PreviewProcessingFailedException,
     ProjectNotFoundException,
     EpisodeNotFoundException,
 )
+from zou.app.utils import permissions
 from zou.app.utils import fs
 
 REMOTE_NORMALIZE_VERSION = 2
@@ -700,18 +703,87 @@ def get_preview_files_for_revision(task_id, revision):
     return fields.serialize_models(preview_files)
 
 
-def update_preview_file_annotations(
+def get_preview_file_annotations_map(preview_file_ids):
+    """
+    Batched form of get_preview_file_annotations(): one query for many
+    preview files, grouped by preview_file_id then by timecode. Returns
+    `{preview_file_id: [entries...]}`; preview files with no annotation
+    comments are simply absent from the result.
+    """
+    preview_file_ids = list({str(pid) for pid in preview_file_ids if pid})
+    if not preview_file_ids:
+        return {}
+    comments = (
+        Comment.query.filter(
+            Comment.preview_file_id.in_(preview_file_ids)
+        )
+        .filter(Comment.annotation.isnot(None))
+        .order_by(Comment.created_at)
+        .all()
+    )
+    entries_by_preview = {}
+    for comment in comments:
+        preview_file_id = str(comment.preview_file_id)
+        entries_by_time = entries_by_preview.setdefault(preview_file_id, {})
+        annotation = comment.annotation or {}
+        objects = (annotation.get("drawing") or {}).get("objects", []) or []
+        if not objects:
+            continue
+        time_value = (
+            comment.timecode
+            if comment.timecode is not None
+            else annotation.get("time", 0)
+        )
+        entry = entries_by_time.get(time_value)
+        if entry is None:
+            entry = {
+                "time": time_value,
+                "frame": annotation.get("frame"),
+                "width": annotation.get("width"),
+                "height": annotation.get("height"),
+                "drawing": {"objects": []},
+            }
+            entries_by_time[time_value] = entry
+        for drawing_object in objects:
+            tagged_object = dict(drawing_object)
+            tagged_object["commentId"] = str(comment.id)
+            entry["drawing"]["objects"].append(tagged_object)
+    return {
+        preview_file_id: [
+            entries_by_time[key] for key in sorted(entries_by_time)
+        ]
+        for preview_file_id, entries_by_time in entries_by_preview.items()
+    }
+
+
+def get_preview_file_annotations(preview_file_id):
+    """
+    Aggregate every comment's own annotation on this preview file into
+    the same `[{time, frame, width, height, drawing: {objects}}]` shape
+    the player has always consumed from `preview_file.annotations`, one
+    entry per distinct timecode. Each drawing object is tagged with the
+    comment it belongs to (on top of its existing `createdBy`), so the
+    frontend can tell which objects the current person may select.
+    """
+    return get_preview_file_annotations_map([preview_file_id]).get(
+        str(preview_file_id), []
+    )
+
+
+def apply_comment_annotation_diff(
+    comment_id,
     person_id,
-    project_id,
-    preview_file_id,
     additions=None,
     updates=None,
     deletions=None,
 ):
     """
-    Update annotations for given preview file.
-    Uses a Redis lock to prevent race conditions when multiple processes update
-    annotations on the same preview file concurrently.
+    Apply an additions/updates/deletions diff (same shape previously sent
+    to `update_preview_file_annotations`) to a single comment's own
+    annotation. Redis-locked per comment so concurrent edits from the
+    same author (e.g. two open tabs) don't race. Only the comment's
+    author may call this — enforced here rather than at the blueprint
+    layer since guests and studio users both route through it.
     """
     if additions is None:
         additions = []
@@ -719,34 +791,27 @@ def update_preview_file_annotations(
         updates = []
     if deletions is None:
         deletions = []
-    with with_preview_file_lock(
-        preview_file_id, timeout=30, wait_timeout=35
+    with with_comment_annotation_lock(
+        comment_id, timeout=30, wait_timeout=35
     ) as acquired:
         if not acquired:
             raise AnnotationLockTimeoutException(
-                "Could not acquire annotation lock for preview file"
+                "Could not acquire annotation lock for comment"
             )
-        preview_file = files_service.get_preview_file_raw(preview_file_id)
-        previous_annotations = copy.deepcopy(preview_file.annotations or [])
-        annotations = _clean_annotations(previous_annotations)
-        annotations = _apply_annotation_additions(
-            previous_annotations, additions
-        )
-        annotations = _apply_annotation_updates(annotations, updates)
-        annotations = _apply_annotation_deletions(annotations, deletions)
-        preview_file.update({"annotations": annotations})
-        files_service.clear_preview_file_cache(preview_file_id)
-        preview_file = files_service.get_preview_file(preview_file_id)
-        events.emit(
-            "preview-file:annotation-update",
-            {
-                "preview_file_id": preview_file_id,
-                "person_id": person_id,
-                "updated_at": preview_file["updated_at"],
-            },
-            project_id=project_id,
-        )
-        return preview_file
+        comment = Comment.get(comment_id)
+        if comment is None:
+            raise CommentNotFoundException()
+        if str(comment.person_id) != str(person_id):
+            raise permissions.PermissionDenied()
+
+        previous = copy.deepcopy(comment.annotation) if comment.annotation else None
+        entries = [previous] if previous is not None else []
+        entries = _clean_annotations(entries)
+        entries = _apply_annotation_additions(entries, additions)
+        entries = _apply_annotation_updates(entries, updates)
+        entries = _apply_annotation_deletions(entries, deletions)
+        comment.update({"annotation": entries[0] if entries else None})
+        return comment.serialize(relations=True)
 
 
 def _ensure_object_id(drawing_object):
@@ -1143,7 +1208,7 @@ def extract_annotation_frame_from_preview_file(
     the preview binary is not available.
     """
     extension = (preview_file.get("extension") or "").lower()
-    annotations = preview_file.get("annotations") or []
+    annotations = get_preview_file_annotations(preview_file["id"])
     if extension == "mp4":
         if frame_number is None:
             raise WrongParameterException(
@@ -1280,7 +1345,7 @@ def _build_annotated_frame_entries(preview_file):
     raises AnnotationNotFoundException when there is nothing to render
     and WrongParameterException for unsupported extensions.
     """
-    annotations = preview_file.get("annotations") or []
+    annotations = get_preview_file_annotations(preview_file["id"])
     if not annotations:
         raise AnnotationNotFoundException("Preview file has no annotations")
     extension = (preview_file.get("extension") or "").lower()

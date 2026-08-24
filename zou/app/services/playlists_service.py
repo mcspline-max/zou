@@ -318,9 +318,10 @@ def set_preview_files_for_entities(playlist_dict, with_annotations=True):
 
     # Select scalar columns instead of full PreviewFile ORM objects: a playlist
     # can hold thousands of revisions, and hydrating that many ORM instances
-    # was the bulk of the query time. We also skip the heavy JSONB blobs `data`
-    # (never used) and `annotations` (only when the caller asked for them). This
-    # mirrors get_preview_files_for_entity().
+    # was the bulk of the query time. We also skip the heavy JSONB blob `data`
+    # (never used). Annotations (when asked for) come from a single batched
+    # comment query below instead of a column here. This mirrors
+    # get_preview_files_for_entity().
     preview_columns = [
         PreviewFile.id,
         PreviewFile.revision,
@@ -334,8 +335,6 @@ def set_preview_files_for_entities(playlist_dict, with_annotations=True):
         Task.task_type_id,
         Task.entity_id,
     ]
-    if with_annotations:
-        preview_columns.append(PreviewFile.annotations)
 
     preview_rows = (
         PreviewFile.query.with_entities(*preview_columns)
@@ -372,10 +371,17 @@ def set_preview_files_for_entities(playlist_dict, with_annotations=True):
             "created_at": fields.serialize_value(row.created_at),
             "task_id": str(row.task_id),
         }  # Do not add too much field to avoid building too big responses
-        if with_annotations:
-            light_preview_file["annotations"] = row.annotations
         previews[entity_id][task_type_id].append(light_preview_file)
         preview_file_map[preview_file_id] = light_preview_file
+
+    if with_annotations:
+        annotations_map = preview_files_service.get_preview_file_annotations_map(
+            preview_file_map.keys()
+        )
+        for preview_file_id, light_preview_file in preview_file_map.items():
+            light_preview_file["annotations"] = annotations_map.get(
+                preview_file_id, []
+            )
 
     for entity_id in previews.keys():
         for task_type_id in previews[entity_id].keys():
@@ -415,7 +421,6 @@ def get_preview_files_for_entity(entity_id):
             PreviewFile.height,
             PreviewFile.duration,
             PreviewFile.status,
-            PreviewFile.annotations,
             PreviewFile.created_at,
             PreviewFile.task_id,
             PreviewFile.data,
@@ -440,7 +445,6 @@ def get_preview_files_for_entity(entity_id):
         preview_file_height,
         preview_file_duration,
         preview_file_status,
-        preview_file_annotations,
         preview_file_created_at,
         preview_file_task_id,
         preview_file_data,
@@ -461,7 +465,6 @@ def get_preview_files_for_entity(entity_id):
                     "height": preview_file_height,
                     "duration": float(preview_file_duration or 0),
                     "status": preview_file_status,
-                    "annotations": preview_file_annotations,
                     "created_at": preview_file_created_at,
                     "task_id": task_id,
                     "task_type_id": str(task.task_type_id),
@@ -472,6 +475,12 @@ def get_preview_files_for_entity(entity_id):
                 }
             )
         )
+
+    annotations_map = preview_files_service.get_preview_file_annotations_map(
+        preview["id"]
+        for previews_list in task_previews.values()
+        for preview in previews_list
+    )
 
     for task_id in task_previews.keys():
         preview_files = task_previews[task_id]
@@ -489,7 +498,9 @@ def get_preview_files_for_entity(entity_id):
                     "height": preview_file["height"],
                     "duration": preview_file["duration"],
                     "status": preview_file["status"],
-                    "annotations": preview_file["annotations"],
+                    "annotations": annotations_map.get(
+                        preview_file["id"], []
+                    ),
                     "previews": preview_file["previews"],
                     "created_at": preview_file["created_at"],
                     "task_id": preview_file["task_id"],
@@ -1352,6 +1363,9 @@ def _get_playlist_preview_file_list(preview_files):
     Turn preview file active records into preview file dict that match the
     playlist data structure.
     """
+    annotations_map = preview_files_service.get_preview_file_annotations_map(
+        str(preview_file.id) for preview_file in preview_files
+    )
     return [
         {
             "id": str(preview_file.id),
@@ -1361,7 +1375,7 @@ def _get_playlist_preview_file_list(preview_files):
             "height": preview_file.height,
             "duration": float(preview_file.duration or 0),
             "status": str(preview_file.status),
-            "annotations": preview_file.annotations,
+            "annotations": annotations_map.get(str(preview_file.id), []),
             "created_at": fields.serialize_value(preview_file.created_at),
             "task_id": str(preview_file.task_id),
         }

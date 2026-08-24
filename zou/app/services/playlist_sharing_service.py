@@ -334,6 +334,8 @@ def update_guest_comment(comment_id, guest_id, data, token):
         comment_row.checklist = data["checklist"] or []
     if "timecode" in data:
         comment_row.timecode = data["timecode"]
+    if "annotation" in data:
+        comment_row.annotation = data["annotation"]
     if new_status_id:
         comment_row.task_status_id = new_status_id
     comment_row.editor_id = guest_id
@@ -372,6 +374,31 @@ def update_guest_comment(comment_id, guest_id, data, token):
         project_id=task["project_id"],
     )
     return _serialize_enriched_comment(comment_id)
+
+
+def update_guest_comment_annotation(
+    comment_id, guest_id, token, additions=None, updates=None, deletions=None
+):
+    """
+    Apply an additions/updates/deletions diff to a guest-owned comment's
+    own annotation, while its author is still drawing. Reuses
+    `_load_guest_comment` for the same ownership + playlist-scope check
+    `update_guest_comment`/`delete_guest_comment` already enforce, then
+    delegates the actual diff to `preview_files_service` (Redis-locked,
+    author-checked again there).
+    """
+    from zou.app.services import preview_files_service
+
+    _load_guest_comment(comment_id, guest_id, token)
+    result = preview_files_service.apply_comment_annotation_diff(
+        comment_id,
+        guest_id,
+        additions=additions,
+        updates=updates,
+        deletions=deletions,
+    )
+    tasks_service.clear_comment_cache(comment_id)
+    return result
 
 
 def delete_guest_comment(comment_id, guest_id, token):
@@ -744,7 +771,10 @@ def _enrich_shared_playlist_project_line(playlist_dict):
 
 def _load_task_styling_by_task_id(task_ids):
     """
-    Return (task_type_by_task_id, task_status_color_by_task_id) dicts.
+    Return (task_type_by_task_id, task_status_by_task_id) dicts. The
+    latter carries both the status id (needed to post a comment/
+    annotation without silently changing the task's status) and its
+    color (the only thing a shared viewer could show before).
     """
     if not task_ids:
         return {}, {}
@@ -759,12 +789,13 @@ def _load_task_styling_by_task_id(task_ids):
             TaskType.name,
             TaskType.color,
             TaskType.for_entity,
+            TaskStatus.id,
             TaskStatus.color,
         )
         .all()
     )
     task_type_by_task_id = {}
-    task_status_color_by_task_id = {}
+    task_status_by_task_id = {}
     for (
         _,
         task_id,
@@ -772,6 +803,7 @@ def _load_task_styling_by_task_id(task_ids):
         task_type_name,
         task_type_color,
         task_type_for_entity,
+        task_status_id,
         task_status_color,
     ) in rows:
         tid = str(task_id)
@@ -781,8 +813,11 @@ def _load_task_styling_by_task_id(task_ids):
             "color": task_type_color,
             "for_entity": task_type_for_entity,
         }
-        task_status_color_by_task_id[tid] = task_status_color
-    return task_type_by_task_id, task_status_color_by_task_id
+        task_status_by_task_id[tid] = {
+            "id": str(task_status_id),
+            "color": task_status_color,
+        }
+    return task_type_by_task_id, task_status_by_task_id
 
 
 def _parent_name_for_shot_entry(entity, entity_type_name, parent_map):
@@ -798,19 +833,23 @@ def _parent_name_for_shot_entry(entity, entity_type_name, parent_map):
 
 
 def _apply_task_styling_to_shot(
-    shot, task_id, task_type_by_task_id, task_status_color_by_task_id
+    shot, task_id, task_type_by_task_id, task_status_by_task_id
 ):
     """
-    Inline the task type and status colors a shared viewer cannot look up.
+    Inline the task type and current status a shared viewer cannot look
+    up on their own — the color for display, and the id so a guest
+    comment/annotation can be posted against the task's actual current
+    status without silently changing it.
     """
     tid = str(task_id)
     task_type = task_type_by_task_id.get(tid)
     if task_type:
         shot["preview_file_task_type"] = task_type
         shot["preview_file_task_type_name"] = task_type["name"]
-    color = task_status_color_by_task_id.get(tid)
-    if color:
-        shot["task_status_color"] = color
+    task_status = task_status_by_task_id.get(tid)
+    if task_status:
+        shot["task_status_id"] = task_status["id"]
+        shot["task_status_color"] = task_status["color"]
 
 
 def enrich_shots_with_entity_info(playlist_dict):
@@ -852,7 +891,7 @@ def enrich_shots_with_entity_info(playlist_dict):
         for s in shots
         if s.get("preview_file_task_id")
     }
-    task_type_by_task_id, task_status_color_by_task_id = (
+    task_type_by_task_id, task_status_by_task_id = (
         _load_task_styling_by_task_id(task_ids)
     )
 
@@ -872,7 +911,7 @@ def enrich_shots_with_entity_info(playlist_dict):
             shot,
             task_id,
             task_type_by_task_id,
-            task_status_color_by_task_id,
+            task_status_by_task_id,
         )
     return playlist_dict
 

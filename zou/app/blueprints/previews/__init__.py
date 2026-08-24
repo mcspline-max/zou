@@ -25,7 +25,6 @@ from zou.app.blueprints.previews.resources import (
     CreatePersonThumbnailResource,
     RunningPreviewFiles,
     SetMainPreviewResource,
-    UpdateAnnotationsResource,
     UpdatePreviewPositionResource,
     ExtractFrameFromPreview,
     ExtractAnnotatedFrameFromPreview,
@@ -158,10 +157,6 @@ routes = [
     (
         "/actions/preview-files/<preview_file_id>/update-position",
         UpdatePreviewPositionResource,
-    ),
-    (
-        "/actions/preview-files/<preview_file_id>/update-annotations",
-        UpdateAnnotationsResource,
     ),
     (
         "/actions/preview-files/<preview_file_id>/extract-tile",

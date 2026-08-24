@@ -94,6 +94,7 @@ class Comment(db.Model, BaseMixin, SerializerMixin):
     links = db.Column(db.ARRAY(db.String()))
 
     timecode = db.Column(db.Float, nullable=True)
+    annotation = db.Column(JSONB, nullable=True)
 
     task_status_id = db.Column(
         UUIDType(binary=False), db.ForeignKey("task_status.id"), index=True

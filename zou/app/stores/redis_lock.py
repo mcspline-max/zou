@@ -78,3 +78,18 @@ def with_preview_file_lock(preview_file_id, timeout=30, wait_timeout=35):
         wait_timeout,
     ) as acquired:
         yield acquired
+
+
+@contextmanager
+def with_comment_annotation_lock(comment_id, timeout=30, wait_timeout=35):
+    """
+    Context manager: acquire lock for a single comment's annotation
+    (drawing), yield, then release. See `with_lock` for the True/False
+    contract.
+    """
+    with with_lock(
+        f"comment_annotation_lock:{comment_id}",
+        timeout,
+        wait_timeout,
+    ) as acquired:
+        yield acquired

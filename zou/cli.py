@@ -1102,6 +1102,28 @@ def normalize_annotation_times(project_id, dry_run):
 
 @cli.command()
 @click.option(
+    "--project-id",
+    required=False,
+    default=None,
+    show_default=True,
+)
+@click.option("--dry-run", is_flag=True, default=False, show_default=True)
+def backfill_annotation_comments(project_id, dry_run):
+    """
+    One-time migration: turn every preview_file.annotations entry into
+    its own Comment carrying an annotation, split by author so each
+    comment ends up owned by exactly one person. Safe to run more than
+    once (already-backfilled comments are skipped).
+    """
+    from zou.app.utils import commands
+
+    commands.backfill_annotation_comments(
+        project_id=project_id, dry_run=dry_run
+    )
+
+
+@cli.command()
+@click.option(
     "--path",
     required=True,
     help="Plugin path: local directory, zip file, or git repository URL",

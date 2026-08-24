@@ -120,6 +120,7 @@ def create_comment(
     for_client=False,
     timecode=None,
     preview_file_id=None,
+    annotation=None,
 ):
     """
     Create a new comment and related: news, notifications and events.
@@ -149,6 +150,7 @@ def create_comment(
         for_client=for_client,
         timecode=timecode,
         preview_file_id=preview_file_id,
+        annotation=annotation,
     )
 
     if with_hashtags:
@@ -432,6 +434,7 @@ def new_comment(
     for_client=False,
     timecode=None,
     preview_file_id=None,
+    annotation=None,
 ):
     """
     Create a new comment for given object (by default, it considers this object
@@ -443,6 +446,13 @@ def new_comment(
         checklist = []
     if links is None:
         links = []
+    if annotation is not None and timecode is not None:
+        # Keep the entry's own "time" (the shape the player already
+        # expects from the legacy preview_file.annotations array) in
+        # sync with the comment's authoritative timecode, regardless of
+        # what the client sent.
+        annotation = dict(annotation)
+        annotation["time"] = timecode
     created_at_date = None
     task = tasks_service.get_task(task_id)
     if created_at is not None and len(created_at) > 0:
@@ -472,6 +482,7 @@ def new_comment(
         for_client=for_client,
         timecode=timecode,
         preview_file_id=preview_file_id,
+        annotation=annotation,
     )
 
     comment = comment.serialize(relations=True)

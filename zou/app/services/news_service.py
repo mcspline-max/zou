@@ -216,7 +216,6 @@ def get_last_news_for_project(
         Comment.task_status_id,
         Task.entity_id,
         PreviewFile.extension,
-        PreviewFile.annotations,
         PreviewFile.revision,
         Entity.preview_file_id,
     )
@@ -229,7 +228,7 @@ def get_last_news_for_project(
     entity_ids = list(
         set(
             task_entity_id
-            for (_, _, _, _, _, _, task_entity_id, _, _, _, _) in news_list
+            for (_, _, _, _, _, _, task_entity_id, _, _, _) in news_list
         )
     )
     entity_names_map = names_service.get_full_entity_names(entity_ids)
@@ -243,7 +242,6 @@ def get_last_news_for_project(
         task_status_id,
         task_entity_id,
         preview_file_extension,
-        preview_file_annotations,
         preview_file_revision,
         entity_preview_file_id,
     ) in news_list:
