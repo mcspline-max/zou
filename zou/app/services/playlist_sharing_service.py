@@ -714,12 +714,40 @@ def get_shared_task_comments(task_id):
     user.
     """
     from zou.app.services.tasks_service import (
+        _build_ack_map_for_comments,
+        _build_attachment_map_for_comments,
+        _build_department_mention_map_for_comments,
+        _build_mention_map_for_comments,
         _prepare_query,
         _run_task_comments_query,
     )
 
     query = _prepare_query(task_id, is_client=True, is_manager=False)
-    comments, _ = _run_task_comments_query(query)
+    comments, comment_ids = _run_task_comments_query(query)
+
+    # _run_task_comments_query only builds the comment rows themselves;
+    # the linked records come from separate grouped queries, exactly as
+    # tasks_service.get_comments does after calling it. Without this the
+    # shared client never sees an attachment posted from the studio.
+    # Previews stay out on purpose: the shared player already shows the
+    # revision being reviewed, and the guest has no business seeing the
+    # studio's other revisions listed under each comment.
+    if comments:
+        ack_map = _build_ack_map_for_comments(comment_ids)
+        mention_map = _build_mention_map_for_comments(comment_ids)
+        department_mention_map = _build_department_mention_map_for_comments(
+            comment_ids
+        )
+        attachment_file_map = _build_attachment_map_for_comments(comment_ids)
+        for comment in comments:
+            comment["acknowledgements"] = ack_map.get(comment["id"], [])
+            comment["mentions"] = mention_map.get(comment["id"], [])
+            comment["department_mentions"] = department_mention_map.get(
+                comment["id"], []
+            )
+            comment["attachment_files"] = attachment_file_map.get(
+                comment["id"], []
+            )
 
     guest_ids = {
         str(person_id)
